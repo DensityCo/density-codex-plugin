@@ -1,0 +1,39 @@
+{
+  "name": "density",
+  "version": "0.1.0",
+  "description": "Ask questions of local Density customer data and render Broadsheet-style answers inline in Codex.",
+  "author": {
+    "name": "Density"
+  },
+  "homepage": "https://density.io/",
+  "license": "MIT",
+  "keywords": [
+    "density",
+    "analytics",
+    "duckdb",
+    "parquet",
+    "charts"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Density",
+    "shortDescription": "Ask local Density data questions with inline charts.",
+    "longDescription": "Density helps Codex install or find the Density CLI, verify local Parquet-first storage, sync or prepare customer data, ask natural-language questions, and return concise title/subtitle/chart answers inline.",
+    "developerName": "Density",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Set up Density for local chart questions",
+      "Ask Density what rooms are busiest",
+      "Show a Density space type breakdown"
+    ],
+    "brandColor": "#8C2F1D",
+    "composerIcon": "./assets/density-icon.png",
+    "logo": "./assets/density-icon.png"
+  },
+  "mcpServers": "./.mcp.json"
+}
