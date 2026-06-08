@@ -11,6 +11,12 @@ codex plugin marketplace add https://github.com/densityco/density-codex-plugin
 codex plugin add density@densityai
 ```
 
+Or give Codex this:
+
+```text
+Please install the Density plugin: run `codex plugin marketplace add https://github.com/densityco/density-codex-plugin` and then `codex plugin add density@densityai`. After installing, start a new thread and help me set up Density.
+```
+
 Start a new Codex thread after installing so the Density skill and MCP tools load.
 
 ## Try It
