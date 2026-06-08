@@ -8,7 +8,7 @@ Density lets Codex set up the local Density CLI, inspect local Density data, and
 
 ```bash
 codex plugin marketplace add https://github.com/densityco/density-codex-plugin
-codex plugin add density@density
+codex plugin add density@densityai
 ```
 
 Start a new Codex thread after installing so the Density skill and MCP tools load.
