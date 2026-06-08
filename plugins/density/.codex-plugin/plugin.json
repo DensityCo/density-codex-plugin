@@ -1,6 +1,6 @@
 {
   "name": "density",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Ask questions of local Density customer data and render Broadsheet-style answers inline in Codex.",
   "author": {
     "name": "Density"

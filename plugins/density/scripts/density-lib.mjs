@@ -1,10 +1,12 @@
-import { access, mkdir, stat } from 'node:fs/promises';
+import { access, mkdir, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
 export const defaultDataDir = () => path.join(os.homedir(), '.density-cli');
+const latestPluginManifestUrl = () => process.env.DENSITY_PLUGIN_LATEST_MANIFEST_URL
+  ?? 'https://raw.githubusercontent.com/DensityCo/density-codex-plugin/main/plugins/density/.codex-plugin/plugin.json';
 
 export const fileExists = async (file) => {
   try {
@@ -156,3 +158,59 @@ export const storageReport = async (dataDir) => {
     parquetFirst: parquetBytes > 0,
   };
 };
+
+export const checkPluginUpdate = async () => {
+  const current = await pluginVersion();
+  if (!current) {
+    return { checked: false, available: false, reason: 'Could not read installed Density plugin version.' };
+  }
+  try {
+    const response = await fetch(latestPluginManifestUrl());
+    if (!response.ok) {
+      return { checked: false, available: false, current, reason: `Could not fetch latest version (${response.status}).` };
+    }
+    const latestManifest = await response.json();
+    const latest = typeof latestManifest.version === 'string' ? latestManifest.version : undefined;
+    if (!latest) {
+      return { checked: false, available: false, current, reason: 'Latest manifest did not include a version.' };
+    }
+    const available = compareVersions(current, latest) < 0;
+    return {
+      checked: true,
+      available,
+      current,
+      latest,
+      command: 'codex plugin marketplace upgrade densityai && codex plugin add density@densityai',
+      prompt: available ? 'A newer version of the Density plugin is available. Would you like to install the latest?' : undefined,
+    };
+  } catch (error) {
+    return { checked: false, available: false, current, reason: `Could not check for updates: ${error.message}` };
+  }
+};
+
+export const pluginVersion = async () => {
+  const manifestPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '.codex-plugin', 'plugin.json');
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    return typeof manifest.version === 'string' ? manifest.version : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const compareVersions = (left, right) => {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  for (let i = 0; i < Math.max(leftParts.length, rightParts.length); i += 1) {
+    const diff = (leftParts[i] ?? 0) - (rightParts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+};
+
+const versionParts = (version) => version
+  .split('+', 1)[0]
+  .split('-', 1)[0]
+  .split('.')
+  .map((part) => Number.parseInt(part, 10))
+  .map((part) => Number.isFinite(part) ? part : 0);

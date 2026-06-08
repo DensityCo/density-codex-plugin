@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { defaultDataDir, ensureDensityCliBuilt, parseAskOutput, renderPng, resolveDensityCli, runDensity, storageReport } from '../scripts/density-lib.mjs';
+import { checkPluginUpdate, defaultDataDir, ensureDensityCliBuilt, parseAskOutput, pluginVersion, renderPng, resolveDensityCli, runDensity, storageReport } from '../scripts/density-lib.mjs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -90,7 +90,7 @@ async function handleRawMessage(raw) {
       sendResult(message.id, {
         protocolVersion: message.params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'density', version: '0.1.0' },
+        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.1' },
       });
       return;
     }
@@ -162,16 +162,20 @@ async function setup(args) {
   }
   const storage = await storageReport(dataDir);
   addCheck('canonical parquet present', storage.parquetBytes > 0, storage.parquetBytes > 0 ? `${storage.parquetBytes} bytes` : 'No parquet mirror yet.');
+  const update = await checkPluginUpdate();
+  const nextSteps = checks.some((check) => !check.ok && check.name === 'density status runs')
+    ? ['Run auth_login, then onboard_customer.']
+    : storage.parquetBytes === 0
+      ? ['Run onboard_customer after auth, or create_demo_customer from an existing local dataset.']
+      : [];
+  if (update.available) nextSteps.unshift(update.prompt);
   return {
     ok: checks.every((check) => check.ok),
     dataDir,
     checks,
     storage,
-    nextSteps: checks.some((check) => !check.ok && check.name === 'density status runs')
-      ? ['Run auth_login, then onboard_customer.']
-      : storage.parquetBytes === 0
-        ? ['Run onboard_customer after auth, or create_demo_customer from an existing local dataset.']
-        : [],
+    update,
+    nextSteps,
   };
 }
 

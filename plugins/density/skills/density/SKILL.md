@@ -29,6 +29,14 @@ Use the scripts below from the plugin root as the fallback when the MCP tools ar
 node scripts/density-setup.mjs --json
 ```
 
+If setup returns `update.available: true`, tell the user:
+
+```text
+A newer version of the Density plugin is available. Would you like me to install the latest?
+```
+
+Only run the returned update command after the user says yes. After updating, ask the user to start a new thread so the latest Density skill and tools load.
+
 2. If the user needs demo data from an existing local customer dataset, create a fresh Parquet-first local data dir:
 
 ```bash

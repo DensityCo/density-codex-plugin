@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { defaultDataDir, ensureDensityCliBuilt, resolveDensityCli, runDensity, storageReport, which } from './density-lib.mjs';
+import { checkPluginUpdate, defaultDataDir, ensureDensityCliBuilt, resolveDensityCli, runDensity, storageReport, which } from './density-lib.mjs';
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
@@ -19,6 +19,11 @@ const addCheck = (name, ok, detail) => {
 
 const cli = await resolveDensityCli();
 addCheck('density cli found', Boolean(cli), cli?.source ?? 'Set DENSITY_CLI_BIN or install density on PATH.');
+
+result.update = await checkPluginUpdate();
+if (result.update.available) {
+  result.nextSteps.push(result.update.prompt);
+}
 
 if (cli) {
   const build = await ensureDensityCliBuilt(cli);
@@ -60,5 +65,8 @@ if (json) {
   if (result.nextSteps.length > 0) {
     console.log('Next steps:');
     for (const step of result.nextSteps) console.log(`- ${step}`);
+  }
+  if (result.update?.available) {
+    console.log(`Update command: ${result.update.command}`);
   }
 }
