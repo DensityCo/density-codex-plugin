@@ -13,10 +13,11 @@ Avoid generic dashboard chrome, decorative gradients, and legends that force cro
 For setup/onboarding, the ideal path is:
 
 1. User installs Density.
-2. Plugin setup finds or builds Density CLI.
-3. User completes browser auth if needed.
-4. Plugin syncs or prepares local Parquet-first data.
-5. User asks a question and gets title, subtitle, and inline chart.
+2. User asks Codex to set up Density.
+3. Plugin setup finds or builds Density CLI and runs safe checks automatically.
+4. User completes browser auth only if needed.
+5. Plugin shows one primary next action for longer sync/export work, or reports ready.
+6. User asks a question and gets either a real chart or a precise unsupported-capability message.
 
 Storage rule:
 

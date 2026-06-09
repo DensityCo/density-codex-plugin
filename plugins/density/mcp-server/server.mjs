@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { checkPluginUpdate, defaultDataDir, ensureDensityCliBuilt, parseAskOutput, pluginVersion, renderPng, resolveDensityCli, runDensity, storageReport } from '../scripts/density-lib.mjs';
+import { pluginVersion, storageReport } from '../scripts/density-lib.mjs';
+import { askChart, authLogin, boundedGenericDays, onboardCustomer, resolveDataDir, setup } from '../scripts/density-core.mjs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -21,12 +22,14 @@ const tools = [
     },
     additionalProperties: false,
   }),
-  tool('onboard_customer', 'Prepare local customer data by syncing spaces, 15-minute metrics, and hourly occupancy for a short window.', {
+  tool('onboard_customer', 'Prepare local customer data with staged setup by default; full metrics sync requires explicit fullSync.', {
     type: 'object',
     properties: {
       dataDir: { type: 'string' },
       orgId: { type: 'string', description: 'Optional organization id to select before syncing.' },
-      days: { type: 'number', minimum: 1, maximum: 60, description: 'Window to sync. Defaults to 14.' },
+      days: { type: 'number', minimum: 1, maximum: 7, description: '15-minute metrics window. Defaults to 7.' },
+      fullSync: { type: 'boolean', description: 'Run long metrics/occupancy/export phases. Defaults false.' },
+      timeoutSeconds: { type: 'number', minimum: 1, maximum: 600, description: 'Per-command timeout for explicit full sync.' },
     },
     additionalProperties: false,
   }),
@@ -90,7 +93,7 @@ async function handleRawMessage(raw) {
       sendResult(message.id, {
         protocolVersion: message.params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.1' },
+        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.2' },
       });
       return;
     }
@@ -148,84 +151,10 @@ async function callTool(name, args) {
   }
 }
 
-async function setup(args) {
-  const dataDir = resolveDataDir(args.dataDir);
-  const checks = [];
-  const addCheck = (name, ok, detail) => checks.push({ name, ok, detail });
-  const cli = await resolveDensityCli();
-  addCheck('density cli found', Boolean(cli), cli?.source ?? 'Set DENSITY_CLI_BIN or install density on PATH.');
-  if (cli) {
-    const build = await ensureDensityCliBuilt(cli);
-    addCheck('density cli built', true, build.reason);
-    const status = await runDensity(cli, ['status'], { dataDir, allowFailure: true });
-    addCheck('density status runs', status.code === 0, status.code === 0 ? 'status completed' : (status.stderr || status.stdout).trim());
-  }
-  const storage = await storageReport(dataDir);
-  addCheck('canonical parquet present', storage.parquetBytes > 0, storage.parquetBytes > 0 ? `${storage.parquetBytes} bytes` : 'No parquet mirror yet.');
-  const update = await checkPluginUpdate();
-  const nextSteps = checks.some((check) => !check.ok && check.name === 'density status runs')
-    ? ['Run auth_login, then onboard_customer.']
-    : storage.parquetBytes === 0
-      ? ['Run onboard_customer after auth, or create_demo_customer from an existing local dataset.']
-      : [];
-  if (update.available) nextSteps.unshift(update.prompt);
-  return {
-    ok: checks.every((check) => check.ok),
-    dataDir,
-    checks,
-    storage,
-    update,
-    nextSteps,
-  };
-}
-
-async function authLogin(args) {
-  const cli = await requireCli();
-  const dataDir = resolveDataDir(args.dataDir);
-  const result = await runDensity(cli, ['auth', 'login'], { dataDir, allowFailure: true });
-  return {
-    ok: result.code === 0,
-    dataDir,
-    stdout: result.stdout.trim(),
-    stderr: result.stderr.trim(),
-  };
-}
-
-async function onboardCustomer(args) {
-  const cli = await requireCli();
-  const dataDir = resolveDataDir(args.dataDir);
-  const days = boundedDays(args.days);
-  const steps = [];
-  const runStep = async (name, commandArgs) => {
-    const startedAt = Date.now();
-    const result = await runDensity(cli, commandArgs, { dataDir, allowFailure: true });
-    const step = {
-      name,
-      ok: result.code === 0,
-      seconds: Number(((Date.now() - startedAt) / 1000).toFixed(2)),
-      stdout: result.stdout.trim(),
-      stderr: result.stderr.trim(),
-    };
-    steps.push(step);
-    if (!step.ok) throw new Error(`${name} failed: ${step.stderr || step.stdout}`);
-  };
-  if (args.orgId) await runStep('select organization', ['org', 'use', args.orgId]);
-  await runStep('sync spaces', ['sync', '--stream', 'spaces']);
-  await runStep('sync meeting-room metrics', ['sync', '--stream', 'metrics', '--all-spaces', '--since', `${days}d`, '--until', 'now', '--interval', '15m']);
-  await runStep('sync occupancy overview', ['sync', '--stream', 'occupancy', '--all-spaces', '--since', `${days}d`, '--until', 'now', '--interval', '1h']);
-  return {
-    ok: true,
-    dataDir,
-    days,
-    steps,
-    storage: await storageReport(dataDir),
-  };
-}
-
 async function createDemoCustomer(args) {
   const sourceDir = args.sourceDir || path.join(os.homedir(), '.density-cli-linkedin');
   const outDir = args.outDir || path.join(os.homedir(), '.density-cli-demo-customer');
-  const days = boundedDays(args.days);
+  const days = boundedGenericDays(args.days);
   const result = await runNodeScript('density-demo-customer.mjs', [
     `--source=${sourceDir}`,
     `--out=${outDir}`,
@@ -233,44 +162,6 @@ async function createDemoCustomer(args) {
     '--json',
   ]);
   return JSON.parse(result.stdout);
-}
-
-async function askChart(args) {
-  const question = String(args.question || '').trim();
-  if (!question) throw new Error('question is required.');
-  const cli = await requireCli();
-  const dataDir = resolveDataDir(args.dataDir);
-  const answer = await runDensity(cli, ['ask', question, '--chart'], { dataDir });
-  const parsed = parseAskOutput(answer.stdout);
-  const png = await renderPng(parsed.chart);
-  return {
-    question,
-    title: parsed.title,
-    subtitle: parsed.subtitle,
-    chart: parsed.chart,
-    html: parsed.html,
-    png,
-    dataDir,
-  };
-}
-
-async function requireCli() {
-  const cli = await resolveDensityCli();
-  if (!cli) throw new Error('Density CLI not found. Set DENSITY_CLI_BIN, DENSITY_CLI_REPO, or install density on PATH.');
-  await ensureDensityCliBuilt(cli);
-  return cli;
-}
-
-function boundedDays(value) {
-  const days = value === undefined ? 14 : Number(value);
-  if (!Number.isInteger(days) || days <= 0 || days > 60) {
-    throw new Error('days must be an integer between 1 and 60.');
-  }
-  return days;
-}
-
-function resolveDataDir(value) {
-  return value || process.env.DENSITY_CLI_DATA_DIR || defaultDataDir();
 }
 
 async function runNodeScript(script, args) {

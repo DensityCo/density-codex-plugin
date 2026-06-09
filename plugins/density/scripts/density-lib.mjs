@@ -43,14 +43,29 @@ export const which = async (name) => {
   return undefined;
 };
 
+export const redactSecrets = (value) => String(value ?? '')
+  .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+  .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED_JWT]')
+  .replace(/\b((?:access|refresh|id|auth|api|density)?_?token|jwt|authorization)(=|:)\s*([^\s"',}]+)/gi, '$1$2 [REDACTED]')
+  .replace(/\b(sk|pk|dens)_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_TOKEN]');
+
 export const run = async (command, args = [], options = {}) => {
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env,
     shell: options.shell ?? false,
+    detached: options.detached ?? false,
   });
   let stdout = '';
   let stderr = '';
+  let timedOut = false;
+  const timeout = Number(options.timeoutMs ?? 0);
+  const timer = timeout > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+      }, timeout)
+    : undefined;
   child.stdout?.on('data', (chunk) => {
     stdout += chunk;
   });
@@ -60,10 +75,18 @@ export const run = async (command, args = [], options = {}) => {
   const code = await new Promise((resolve) => {
     child.on('close', resolve);
   });
+  if (timer) clearTimeout(timer);
+  const result = {
+    code,
+    stdout: redactSecrets(stdout),
+    stderr: redactSecrets(stderr),
+    timedOut,
+  };
   if (code !== 0 && !options.allowFailure) {
-    throw new Error(`${command} ${args.join(' ')} failed (${code}): ${stderr || stdout}`);
+    const reason = timedOut ? `timed out after ${timeout}ms` : (result.stderr || result.stdout);
+    throw new Error(redactSecrets(`${command} ${args.join(' ')} failed (${code}): ${reason}`));
   }
-  return { code, stdout, stderr };
+  return result;
 };
 
 const knownCliRepos = () => [
@@ -73,20 +96,20 @@ const knownCliRepos = () => [
 
 export const resolveDensityCli = async () => {
   if (process.env.DENSITY_CLI_COMMAND) {
-    return { command: process.env.DENSITY_CLI_COMMAND, args: [], source: 'DENSITY_CLI_COMMAND' };
+    return { command: process.env.DENSITY_CLI_COMMAND, args: [], source: 'DENSITY_CLI_COMMAND', path: process.env.DENSITY_CLI_COMMAND, explicit: true };
   }
   if (process.env.DENSITY_CLI_BIN && await fileExists(process.env.DENSITY_CLI_BIN)) {
-    return { command: process.execPath, args: [process.env.DENSITY_CLI_BIN], source: 'DENSITY_CLI_BIN' };
-  }
-  const pathDensity = await which('density');
-  if (pathDensity) {
-    return { command: pathDensity, args: [], source: 'PATH' };
+    return { command: process.execPath, args: [process.env.DENSITY_CLI_BIN], source: 'DENSITY_CLI_BIN', path: process.env.DENSITY_CLI_BIN, explicit: true };
   }
   for (const repo of knownCliRepos()) {
     const bin = path.join(repo, 'bin', 'density.mjs');
     if (await fileExists(bin)) {
-      return { command: process.execPath, args: [bin], source: repo, repo };
+      return { command: process.execPath, args: [bin], source: repo, path: bin, repo };
     }
+  }
+  const pathDensity = await which('density');
+  if (pathDensity) {
+    return { command: pathDensity, args: [], source: 'PATH', path: pathDensity, ambiguous: true };
   }
   return undefined;
 };
@@ -105,7 +128,58 @@ export const runDensity = async (cli, args, options = {}) => {
     ...process.env,
     ...(options.dataDir ? { DENSITY_CLI_DATA_DIR: options.dataDir } : {}),
   };
-  return run(cli.command, [...cli.args, ...args], { env, cwd: options.cwd, allowFailure: options.allowFailure });
+  return run(cli.command, [...cli.args, ...args], {
+    env,
+    cwd: options.cwd,
+    allowFailure: options.allowFailure,
+    timeoutMs: options.timeoutMs,
+  });
+};
+
+export const safeCliInfo = (cli) => cli
+  ? {
+      source: cli.source,
+      path: cli.path,
+      command: cli.command,
+      args: cli.args,
+      explicit: Boolean(cli.explicit),
+      ambiguous: Boolean(cli.ambiguous),
+    }
+  : undefined;
+
+export const discoverCliCapabilities = async (cli, options = {}) => {
+  if (!cli) {
+    return { checked: false, chartQuestions: false, reason: 'Density CLI not found.' };
+  }
+  const result = await runDensity(cli, ['capabilities', '--format', 'json'], {
+    allowFailure: true,
+    timeoutMs: options.timeoutMs ?? 5000,
+    dataDir: options.dataDir,
+  });
+  if (result.code !== 0) {
+    return {
+      checked: false,
+      chartQuestions: false,
+      reason: result.timedOut ? 'Capability check timed out.' : (result.stderr || result.stdout || 'Capability check failed.'),
+    };
+  }
+  try {
+    const payload = JSON.parse(result.stdout);
+    return {
+      checked: true,
+      version: typeof payload.version === 'string' ? payload.version : undefined,
+      chartQuestions: Boolean(payload.chartQuestions || payload.commands?.askChart),
+      chartContract: payload.chartContract,
+      htmlReports: Array.isArray(payload.htmlReports) ? payload.htmlReports : [],
+      commands: payload.commands ?? {},
+    };
+  } catch (error) {
+    return {
+      checked: false,
+      chartQuestions: false,
+      reason: `Capability JSON was not parseable: ${error.message}`,
+    };
+  }
 };
 
 export const parseAskOutput = (stdout) => {
@@ -129,8 +203,8 @@ export const renderPng = async (svgFile) => {
   const outDir = path.join(path.dirname(svgFile), 'png');
   await mkdir(outDir, { recursive: true });
   const pngFile = path.join(outDir, `${path.basename(svgFile, '.svg')}.png`);
-  await run(converter, ['-w', '1400', svgFile, '-o', pngFile]);
-  return pngFile;
+  const result = await run(converter, ['-w', '1400', svgFile, '-o', pngFile], { allowFailure: true });
+  return result.code === 0 ? pngFile : undefined;
 };
 
 export const storageReport = async (dataDir) => {
@@ -145,17 +219,37 @@ export const storageReport = async (dataDir) => {
     'data_sources.parquet',
     'external_records.parquet',
   ];
-  const parquetBytes = (await Promise.all(tableFiles.map((file) => fileSize(path.join(parquetDir, file)))))
-    .reduce((sum, n) => sum + n, 0);
+  const tables = await Promise.all(tableFiles.map(async (file) => {
+    const tablePath = path.join(parquetDir, file);
+    const bytes = await fileSize(tablePath);
+    let modifiedAt;
+    try {
+      modifiedAt = (await stat(tablePath)).mtime.toISOString();
+    } catch {
+      modifiedAt = undefined;
+    }
+    return {
+      table: path.basename(file, '.parquet'),
+      file: tablePath,
+      present: bytes > 0,
+      bytes,
+      modifiedAt,
+    };
+  }));
+  const parquetBytes = tables.reduce((sum, table) => sum + table.bytes, 0);
   const duckdbBytes = await fileSize(duckdbFile);
+  const parquetReady = tables.every((table) => table.present);
   return {
     dataDir,
     duckdbFile,
     parquetDir,
     duckdbBytes,
     parquetBytes,
+    tables,
+    expectedTables: tables.map((table) => table.table),
+    parquetReady,
     ratio: parquetBytes > 0 ? Number((duckdbBytes / parquetBytes).toFixed(2)) : undefined,
-    parquetFirst: parquetBytes > 0,
+    parquetFirst: parquetReady,
   };
 };
 

@@ -1,6 +1,6 @@
 ---
 name: density
-description: Use Density to set up the local Density CLI, prepare Parquet-first customer data, ask natural-language questions, and render Broadsheet-style inline charts in Codex.
+description: Use Density to set up the local Density CLI, prepare Parquet-first customer data, check chart capability, and render Broadsheet-style inline charts when supported.
 ---
 
 # Density
@@ -37,7 +37,19 @@ A newer version of the Density plugin is available. Would you like me to install
 
 Only run the returned update command after the user says yes. After updating, ask the user to start a new thread so the latest Density skill and tools load.
 
-2. If the user needs demo data from an existing local customer dataset, create a fresh Parquet-first local data dir:
+2. If setup says local data is missing, use `onboard_customer` or the fallback script. The default path is staged: it may sync cheap metadata, then returns one primary next action for longer metrics/export work instead of hiding a long all-spaces sync.
+
+```bash
+node scripts/density-onboard-customer.mjs --json
+```
+
+Use explicit full sync only when the user is ready for longer local work:
+
+```bash
+node scripts/density-onboard-customer.mjs --full-sync --days=7 --json
+```
+
+3. If the user needs demo data from an existing local customer dataset, create a fresh Parquet-first local data dir:
 
 ```bash
 node scripts/density-demo-customer.mjs \
@@ -49,7 +61,7 @@ node scripts/density-demo-customer.mjs \
 
 This produces canonical `parquet/*.parquet` files plus a small DuckDB catalog of views over Parquet. That is the preferred demo/onboarding shape. Avoid copying or preserving a large hydrated DuckDB file as durable storage.
 
-3. Ask a question and render an inline chart:
+4. Ask a question and render an inline chart when setup reports chart support:
 
 ```bash
 node scripts/density-ask-chart.mjs \
@@ -71,16 +83,20 @@ Example Markdown:
 ![Density chart](/absolute/path/to/chart.png)
 ```
 
+If `ask_chart` reports unsupported chart capability, say plainly that this CLI/plugin pair does not support chart questions yet and offer the returned next action or `density viz --html` fallback.
+
 ## Setup Principles
 
 - Keep the setup path short:
   1. Install/enable Density.
-  2. Run plugin setup.
-  3. If needed, run browser auth through `density auth login`.
+  2. Ask Codex: `Set up Density`.
+  3. Follow the one primary next action only when setup cannot continue safely.
   4. Ask a question.
 - Prefer browser auth. If auth fails, tell the user exactly that the next step is `density auth login`.
 - Use `DENSITY_CLI_DATA_DIR` or the script `--data-dir` flag for customer-specific local data.
 - The plugin should find the CLI through `DENSITY_CLI_COMMAND`, `DENSITY_CLI_BIN`, `DENSITY_CLI_REPO`, `density` on PATH, or known local development checkouts.
+- Prefer explicitly configured or repo-local CLIs over PATH discovery, and report CLI provenance in setup output.
+- Do not ask the user to memorize CLI commands unless setup is blocked.
 
 ## Storage Rule
 
@@ -92,7 +108,7 @@ For customer-scale local data:
 - Good: DuckDB contains views over Parquet for query-only/demo data.
 - Suspicious: DuckDB is many times larger than Parquet and treated as the durable artifact.
 
-When reporting storage, include both sizes and explain the split plainly.
+When reporting storage, include DuckDB and Parquet sizes, expected Parquet table readiness, and a plain next action. Treat DuckDB and Parquet as sensitive local customer data: avoid printing row contents or unnecessary absolute data paths.
 
 ## Chart Style Rule
 
