@@ -92,7 +92,8 @@ Window: last ${days} day(s) of metrics and occupancy based on source max timesta
 Storage: canonical Parquet with a tiny DuckDB query catalog of views over Parquet.
 
 Use:
-DENSITY_CLI_DATA_DIR=${outDir} density ask "what are the busiest rooms?" --chart
+Set DENSITY_CLI_DATA_DIR=${outDir}, ask Codex to set up Density, then ask a chart question.
+If chart questions are unsupported by the installed CLI, use density viz --html instead.
 `);
 
 const storage = await storageReport(outDir);

@@ -2,7 +2,7 @@
 
 This repository is a Codex marketplace for the Density plugin.
 
-Density lets Codex set up the local Density CLI, inspect local Density data, and answer natural-language workplace analytics questions with inline Broadsheet-style charts.
+Density lets Codex set up the local Density CLI, inspect local Density data, and answer workplace analytics questions when the installed CLI exposes chart support.
 
 ## Install
 
@@ -40,6 +40,8 @@ Show me a pie chart of space type breakdown
 ```
 
 Density uses local customer data through the Density CLI. If local data or auth is missing, the setup tool will tell you the next command to run.
+
+Setup is designed as one guided flow. After install, ask Codex to set up Density; it should run safe checks automatically and show one primary next action when auth, local data, or chart support is missing. If the current CLI does not support chart questions, Codex should say that directly instead of pretending a chart was generated.
 
 ## Marketplace Layout
 

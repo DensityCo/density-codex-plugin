@@ -1,7 +1,7 @@
 {
   "name": "density",
-  "version": "0.1.1",
-  "description": "Ask questions of local Density customer data and render Broadsheet-style answers inline in Codex.",
+  "version": "0.1.2",
+  "description": "Set up local Density data and render Broadsheet-style answers inline when the CLI supports chart questions.",
   "author": {
     "name": "Density"
   },
@@ -17,8 +17,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Density",
-    "shortDescription": "Ask local Density data questions with inline charts.",
-    "longDescription": "Density helps Codex install or find the Density CLI, verify local Parquet-first storage, sync or prepare customer data, ask natural-language questions, and return concise title/subtitle/chart answers inline.",
+    "shortDescription": "Set up local Density data and chart when supported.",
+    "longDescription": "Density helps Codex install or find the Density CLI, verify local Parquet-first storage, prepare customer data through a guided setup flow, check chart capability, and return concise title/subtitle/chart answers when the CLI supports them.",
     "developerName": "Density",
     "category": "Productivity",
     "capabilities": [
