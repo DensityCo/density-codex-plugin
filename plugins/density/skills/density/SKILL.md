@@ -46,8 +46,11 @@ node scripts/density-onboard-customer.mjs --json
 Use explicit full sync only when the user is ready for longer local work:
 
 ```bash
-node scripts/density-onboard-customer.mjs --full-sync --days=7 --json
+node scripts/density-onboard-customer.mjs --full-sync --days=14 --json
 ```
+
+The default metrics preload is 14 days. Windows up to 7 days use 15-minute metrics; longer windows use hourly metrics so two-week utilization questions stay practical locally.
+Explicit full sync prewarms starter-question answers and SVG/HTML chart artifacts when the CLI supports it. Pass `prewarmQuestions: false` only when the user wants raw sync/export without the fast-answer cache.
 
 3. If the user needs demo data from an existing local customer dataset, create a fresh Parquet-first local data dir:
 
@@ -60,6 +63,7 @@ node scripts/density-demo-customer.mjs \
 ```
 
 This produces canonical `parquet/*.parquet` files plus a small DuckDB catalog of views over Parquet. That is the preferred demo/onboarding shape. Avoid copying or preserving a large hydrated DuckDB file as durable storage.
+For fast utilization questions, the demo/onboarding output must include the normalized question inputs as well as generic bulk tables: `spaces`, `space_labels`, `space_children`, and `space_metrics`. If setup reports `fastQuestionsReady: false`, follow its `onboard_customer` action before treating chart answers as useful.
 
 4. Ask a question and render an inline chart when setup reports chart support:
 
@@ -85,6 +89,8 @@ Example Markdown:
 
 If `ask_chart` reports unsupported chart capability, say plainly that this CLI/plugin pair does not support chart questions yet and offer the returned next action or `density viz --html` fallback.
 
+5. When checking whether local data can support a fast interactive discussion, use `starter_questions`. On newer CLIs it runs the built-in 100-question pack through `density question --starter --chart --format json` and returns timings plus SVG/HTML artifacts and an artifact manifest path. After a warmup, pass `cached: true` to reopen that manifest quickly. For starter questions and equivalent phrasing, `ask_chart` tries the warmed manifest first through `density question <question> --cached --chart --format ui`, then falls back to live local querying on a cache miss. On older CLIs it returns static suggested questions and an update action.
+
 ## Setup Principles
 
 - Keep the setup path short:
@@ -109,6 +115,7 @@ For customer-scale local data:
 - Suspicious: DuckDB is many times larger than Parquet and treated as the durable artifact.
 
 When reporting storage, include DuckDB and Parquet sizes, expected Parquet table readiness, and a plain next action. Treat DuckDB and Parquet as sensitive local customer data: avoid printing row contents or unnecessary absolute data paths.
+For fast question answering, also check `fastQuestionsReady`; generic `parquetReady` alone can still be insufficient if the normalized space metadata is missing.
 
 ## Chart Style Rule
 
@@ -132,6 +139,8 @@ Known fast paths:
 what are the busiest rooms?
 what are the least used rooms?
 what time are rooms busiest?
+what are the busiest phone booths?
+what are the busiest rooms and phone booths?
 ```
 
 Generated related specs:
