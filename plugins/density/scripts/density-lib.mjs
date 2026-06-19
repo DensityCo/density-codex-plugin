@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -171,6 +171,8 @@ export const discoverCliCapabilities = async (cli, options = {}) => {
       chartQuestions: Boolean(payload.chartQuestions || payload.commands?.askChart),
       chartContract: payload.chartContract,
       htmlReports: Array.isArray(payload.htmlReports) ? payload.htmlReports : [],
+      generativeUi: payload.generativeUi,
+      questionAnswering: payload.questionAnswering,
       commands: payload.commands ?? {},
     };
   } catch (error) {
@@ -207,6 +209,63 @@ export const renderPng = async (svgFile) => {
   return result.code === 0 ? pngFile : undefined;
 };
 
+const summarizeParquetTarget = async (target) => {
+  let targetStat;
+  try {
+    targetStat = await stat(target);
+  } catch {
+    return { files: 0, bytes: 0, modifiedAt: undefined };
+  }
+
+  if (targetStat.isFile()) {
+    return { files: 1, bytes: targetStat.size, modifiedAt: targetStat.mtime.toISOString() };
+  }
+  if (!targetStat.isDirectory()) {
+    return { files: 0, bytes: 0, modifiedAt: undefined };
+  }
+
+  let files = 0;
+  let bytes = 0;
+  let newestMtime = targetStat.mtimeMs;
+  const visit = async (dir) => {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.parquet')) continue;
+      const entryStat = await stat(entryPath);
+      files += 1;
+      bytes += entryStat.size;
+      newestMtime = Math.max(newestMtime, entryStat.mtimeMs);
+    }
+  };
+  await visit(target);
+
+  return {
+    files,
+    bytes,
+    modifiedAt: files > 0 ? new Date(newestMtime).toISOString() : undefined,
+  };
+};
+
+const summarizeParquetTable = async (parquetDir, table) => {
+  const flat = await summarizeParquetTarget(path.join(parquetDir, `${table}.parquet`));
+  const partitioned = await summarizeParquetTarget(path.join(parquetDir, table));
+  const modifiedAt = [flat.modifiedAt, partitioned.modifiedAt].filter(Boolean).sort().at(-1);
+  return {
+    table,
+    file: path.join(parquetDir, `${table}.parquet`),
+    directory: path.join(parquetDir, table),
+    present: flat.files + partitioned.files > 0,
+    files: flat.files + partitioned.files,
+    bytes: flat.bytes + partitioned.bytes,
+    modifiedAt,
+  };
+};
+
 export const storageReport = async (dataDir) => {
   const duckdbFile = path.join(dataDir, 'density.duckdb');
   const parquetDir = path.join(dataDir, 'parquet');
@@ -219,26 +278,18 @@ export const storageReport = async (dataDir) => {
     'data_sources.parquet',
     'external_records.parquet',
   ];
-  const tables = await Promise.all(tableFiles.map(async (file) => {
-    const tablePath = path.join(parquetDir, file);
-    const bytes = await fileSize(tablePath);
-    let modifiedAt;
-    try {
-      modifiedAt = (await stat(tablePath)).mtime.toISOString();
-    } catch {
-      modifiedAt = undefined;
-    }
-    return {
-      table: path.basename(file, '.parquet'),
-      file: tablePath,
-      present: bytes > 0,
-      bytes,
-      modifiedAt,
-    };
-  }));
+  const tables = await Promise.all(tableFiles.map(async (file) => summarizeParquetTable(parquetDir, path.basename(file, '.parquet'))));
+  const fastQuestionTables = await Promise.all([
+    'spaces',
+    'space_labels',
+    'space_children',
+    'space_metrics',
+  ].map(async (table) => summarizeParquetTable(parquetDir, table)));
   const parquetBytes = tables.reduce((sum, table) => sum + table.bytes, 0);
+  const fastQuestionBytes = fastQuestionTables.reduce((sum, table) => sum + table.bytes, 0);
   const duckdbBytes = await fileSize(duckdbFile);
   const parquetReady = tables.every((table) => table.present);
+  const fastQuestionsReady = fastQuestionTables.every((table) => table.present);
   return {
     dataDir,
     duckdbFile,
@@ -248,6 +299,10 @@ export const storageReport = async (dataDir) => {
     tables,
     expectedTables: tables.map((table) => table.table),
     parquetReady,
+    fastQuestionTables,
+    expectedFastQuestionTables: fastQuestionTables.map((table) => table.table),
+    fastQuestionBytes,
+    fastQuestionsReady,
     ratio: parquetBytes > 0 ? Number((duckdbBytes / parquetBytes).toFixed(2)) : undefined,
     parquetFirst: parquetReady,
   };
