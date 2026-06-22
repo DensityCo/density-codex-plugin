@@ -416,6 +416,36 @@ test('setup reports one configure action when no CLI is discoverable', async () 
   });
 });
 
+test('setup reports Node version mismatch before local CLI npm install', async () => {
+  await withTempEnv(async (tempDir) => {
+    delete process.env.DENSITY_CLI_BIN;
+    delete process.env.DENSITY_CLI_COMMAND;
+    process.env.HOME = tempDir;
+
+    const repo = path.join(tempDir, 'density-cli');
+    await mkdir(path.join(repo, 'bin'), { recursive: true });
+    await writeFile(path.join(repo, 'bin', 'density.mjs'), '#!/usr/bin/env node\n');
+    process.env.DENSITY_CLI_REPO = repo;
+
+    const fakeBin = path.join(tempDir, 'bin');
+    await mkdir(fakeBin, { recursive: true });
+    const fakeNode = path.join(fakeBin, 'node');
+    await writeFile(fakeNode, '#!/bin/sh\nprintf "v25.6.0\\n"\n');
+    await chmod(fakeNode, 0o755);
+    process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`;
+
+    const result = await setup({ dataDir: path.join(tempDir, 'data') });
+    const buildCheck = result.checks.find((check) => check.name === 'density cli built');
+
+    assert.equal(result.ok, false);
+    assert.equal(buildCheck.ok, false);
+    assert.match(buildCheck.detail, /requires Node\.js >=24 <25/);
+    assert.match(buildCheck.detail, /duckdb/);
+    assert.equal(result.nextAction.id, 'install_supported_node');
+    assert.equal(result.userVisiblePrimaryActions, 1);
+  });
+});
+
 test('askChart returns precise unsupported capability response', async () => {
   await withTempEnv(async (tempDir) => {
     const fakeCli = path.join(tempDir, 'density.mjs');

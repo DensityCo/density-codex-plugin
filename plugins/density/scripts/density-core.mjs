@@ -98,33 +98,41 @@ export async function setup(args = {}) {
 
   let capabilities = { checked: false, chartQuestions: false, reason: 'Density CLI not found.' };
   let status;
+  let buildError;
   if (cli) {
-    const build = await ensureDensityCliBuilt(cli);
-    addCheck(checks, 'density cli built', true, build.reason);
-    capabilities = await discoverCliCapabilities(cli, { dataDir });
-    addCheck(
-      checks,
-      'density chart capability known',
-      capabilities.checked,
-      capabilities.checked
-        ? (capabilities.chartQuestions ? 'chart questions supported' : 'chart questions not supported by this CLI')
-        : capabilities.reason
-    );
-    addCheck(
-      checks,
-      'fast local question answering advertised',
-      Boolean(capabilities.questionAnswering?.localFirst && capabilities.commands?.questionStarter),
-      capabilities.questionAnswering?.localFirst && capabilities.commands?.questionStarter
-        ? `${capabilities.questionAnswering.starterQuestionCount ?? '50+'} starter questions; target ${capabilities.questionAnswering.targetTextAnswerMs ?? 5000}ms text / ${capabilities.questionAnswering.targetChartAnswerMs ?? 10000}ms charts`
-        : 'CLI does not advertise the fast local utilization question contract yet.'
-    );
-    status = await runDensity(cli, ['status'], { dataDir, allowFailure: true });
-    addCheck(
-      checks,
-      'density status runs',
-      status.code === 0,
-      status.code === 0 ? 'status completed' : oneLine(status.stderr || status.stdout)
-    );
+    try {
+      const build = await ensureDensityCliBuilt(cli);
+      addCheck(checks, 'density cli built', true, build.reason);
+    } catch (error) {
+      buildError = error instanceof Error ? error.message : String(error);
+      addCheck(checks, 'density cli built', false, buildError);
+    }
+    if (!buildError) {
+      capabilities = await discoverCliCapabilities(cli, { dataDir });
+      addCheck(
+        checks,
+        'density chart capability known',
+        capabilities.checked,
+        capabilities.checked
+          ? (capabilities.chartQuestions ? 'chart questions supported' : 'chart questions not supported by this CLI')
+          : capabilities.reason
+      );
+      addCheck(
+        checks,
+        'fast local question answering advertised',
+        Boolean(capabilities.questionAnswering?.localFirst && capabilities.commands?.questionStarter),
+        capabilities.questionAnswering?.localFirst && capabilities.commands?.questionStarter
+          ? `${capabilities.questionAnswering.starterQuestionCount ?? '50+'} starter questions; target ${capabilities.questionAnswering.targetTextAnswerMs ?? 5000}ms text / ${capabilities.questionAnswering.targetChartAnswerMs ?? 10000}ms charts`
+          : 'CLI does not advertise the fast local utilization question contract yet.'
+      );
+      status = await runDensity(cli, ['status'], { dataDir, allowFailure: true });
+      addCheck(
+        checks,
+        'density status runs',
+        status.code === 0,
+        status.code === 0 ? 'status completed' : oneLine(status.stderr || status.stdout)
+      );
+    }
   }
 
   addCheck(checks, 'svg to png renderer found', Boolean(await which('rsvg-convert')), 'Optional: used for inline Codex PNG chart previews.', { optional: true });
@@ -166,7 +174,12 @@ export async function setup(args = {}) {
       label: 'Install or point Codex at the Density CLI.',
       command: 'Set DENSITY_CLI_BIN or install density on PATH.',
     },
-    cli && status?.code !== 0 && /Token|auth|Authorization|login/i.test(status.stderr || status.stdout) && {
+    buildError && {
+      id: 'install_supported_node',
+      label: 'Switch to Node 24 and rebuild the Density CLI.',
+      command: 'Use Node.js 24, then run npm install && npm run build in the Density CLI checkout.',
+    },
+    cli && status && status.code !== 0 && /Token|auth|Authorization|login/i.test(status.stderr || status.stdout) && {
       id: 'auth_login',
       label: 'Run Density browser auth.',
       tool: 'auth_login',
