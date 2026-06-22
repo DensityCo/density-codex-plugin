@@ -5,7 +5,11 @@ import {
   defaultDataDir,
   discoverCliCapabilities,
   ensureDensityCliBuilt,
+  installManagedCliRuntime,
+  loadManagedCliManifest,
   localDataProfileReport,
+  managedCliRuntimeStatus,
+  missingRequiredCliCapabilities,
   renderPng,
   resolveDensityCli,
   runDensity,
@@ -369,6 +373,17 @@ export const primaryNextAction = (actions) => actions.find(Boolean);
 
 export const toNextSteps = (action) => action ? [action.label] : [];
 
+const managedCliNextAction = ({ dataDir, reason, missingRequiredCapabilities = [] }) => ({
+  id: 'install_managed_cli',
+  label: missingRequiredCapabilities.length > 0
+    ? 'Install or update the managed Density CLI runtime.'
+    : 'Install the managed Density CLI runtime.',
+  tool: 'install_managed_cli',
+  args: { dataDir },
+  reason,
+  missingRequiredCapabilities,
+});
+
 const starterUsefulness = (readiness) => {
   const nonzeroAnswerCount = Number(readiness?.nonzeroAnswerCount ?? 0);
   const useful = nonzeroAnswerCount > 0;
@@ -431,12 +446,29 @@ export async function checkStarterCache(cli, dataDir) {
 export async function setup(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
   const checks = [];
+  const managedManifest = await loadManagedCliManifest();
+  const managedRuntime = await managedCliRuntimeStatus(managedManifest);
   const cli = await resolveDensityCli();
   addCheck(checks, 'density cli found', Boolean(cli), cli?.source ?? 'Set DENSITY_CLI_BIN or install density on PATH.', {
     cli: safeCliInfo(cli),
   });
+  addCheck(
+    checks,
+    'managed cli manifest configured',
+    Boolean(managedManifest),
+    managedManifest ? `version ${managedManifest.version}` : 'No managed CLI manifest is configured.',
+    { optional: Boolean(cli) }
+  );
+  addCheck(
+    checks,
+    'managed cli runtime installed',
+    managedRuntime.installed || Boolean(cli),
+    managedRuntime.installed ? managedRuntime.path : 'Run install_managed_cli to install the managed runtime.',
+    { optional: Boolean(cli), managedCli: managedRuntime }
+  );
 
   let capabilities = { checked: false, chartQuestions: false, reason: 'Density CLI not found.' };
+  let missingRequiredCapabilities = [];
   let status;
   if (cli) {
     const build = await ensureDensityCliBuilt(cli);
@@ -466,6 +498,7 @@ export async function setup(args = {}) {
         ? 'available-buildings reports building status, go-live, metric coverage, geometry, and live wayfinding eligibility.'
         : 'CLI does not advertise building lifecycle/go-live readiness yet.'
     );
+    missingRequiredCapabilities = missingRequiredCliCapabilities(capabilities, managedManifest?.requiredCapabilities);
     status = await runDensity(cli, ['status'], { dataDir, allowFailure: true });
     addCheck(
       checks,
@@ -508,7 +541,19 @@ export async function setup(args = {}) {
   }
 
   const update = await checkPluginUpdate();
+  const usableCliSelected = Boolean(cli) && missingRequiredCapabilities.length === 0;
+  const managedInstallNeeded = Boolean(managedManifest)
+    && !cli?.explicit
+    && !usableCliSelected
+    && (!managedRuntime.installed || missingRequiredCapabilities.length > 0);
   const nextAction = primaryNextAction([
+    managedInstallNeeded && managedCliNextAction({
+      dataDir,
+      reason: !managedRuntime.installed
+        ? 'The plugin-managed Density CLI runtime is not installed.'
+        : 'The current Density CLI does not advertise the managed runtime capability contract.',
+      missingRequiredCapabilities,
+    }),
     !cli && {
       id: 'configure_cli',
       label: 'Install or point Codex at the Density CLI.',
@@ -560,10 +605,32 @@ export async function setup(args = {}) {
     storage,
     starterCache,
     update,
+    managedCli: {
+      manifest: managedManifest,
+      runtime: managedRuntime,
+      missingRequiredCapabilities,
+    },
     nextAction,
     nextSteps: toNextSteps(nextAction),
     userVisiblePrimaryActions: nextAction ? 1 : 0,
   };
+}
+
+export async function installManagedCli(args = {}) {
+  try {
+    return await installManagedCliRuntime({
+      dataDir: resolveDataDir(args.dataDir),
+      manifestPath: args.manifestPath,
+      platform: args.platform,
+      runtimeRoot: args.runtimeRoot,
+      timeoutMs: args.timeoutMs,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: oneLine(error.message),
+    };
+  }
 }
 
 const summarizeAvailableBuildings = (buildings) => buildings.reduce((summary, building) => {
@@ -1630,7 +1697,7 @@ export async function createDemoCustomer(args = {}) {
 
 export async function requireCli() {
   const cli = await resolveDensityCli();
-  if (!cli) throw new Error('Density CLI not found. Set DENSITY_CLI_BIN, DENSITY_CLI_REPO, or install density on PATH.');
+  if (!cli) throw new Error('Density CLI not found. Run install_managed_cli, set DENSITY_CLI_BIN, set DENSITY_CLI_REPO, or install density on PATH.');
   await ensureDensityCliBuilt(cli);
   return cli;
 }

@@ -1,14 +1,23 @@
-import { access, mkdir, readFile, readdir, stat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { constants, createReadStream, createWriteStream } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { fileURLToPath } from 'node:url';
 
 export const defaultDataDir = () => path.join(os.homedir(), '.density-cli');
+export const defaultManagedCliRuntimeRoot = () => process.env.DENSITY_PLUGIN_RUNTIME_DIR
+  ?? path.join(defaultDataDir(), 'plugin-runtime');
 const latestPluginManifestUrl = () => process.env.DENSITY_PLUGIN_LATEST_MANIFEST_URL
   ?? 'https://raw.githubusercontent.com/DensityCo/density-codex-plugin/main/plugins/density/.codex-plugin/plugin.json';
 const capabilityCache = new Map();
 const storageCache = new Map();
+const scriptDir = () => path.dirname(fileURLToPath(import.meta.url));
+const pluginRoot = () => path.resolve(scriptDir(), '..');
+const pluginManifestPath = () => path.join(pluginRoot(), '.codex-plugin', 'plugin.json');
 const CACHE_FINGERPRINT_TABLES = [
   'resources',
   'space_counts',
@@ -105,15 +114,134 @@ export const run = async (command, args = [], options = {}) => {
 
 const knownCliRepos = () => [
   process.env.DENSITY_CLI_REPO,
-  path.join(os.homedir(), 'dev', 'density-cli'),
 ].filter(Boolean);
+
+export const managedCliPlatform = () => `${process.platform}-${os.arch()}`;
+
+const looksLikeJson = (value) => String(value ?? '').trim().startsWith('{');
+
+const localFilePath = (value) => String(value ?? '').startsWith('file://')
+  ? fileURLToPath(value)
+  : value;
+
+const commandForCliBin = (bin) => /\.(?:cjs|js|mjs)$/i.test(bin)
+  ? { command: process.execPath, args: [bin] }
+  : { command: bin, args: [] };
+
+const normalizeManagedCliManifest = (manifest, source) => {
+  if (!manifest || typeof manifest !== 'object') return undefined;
+  if (manifest.managedCli && typeof manifest.managedCli === 'object') {
+    return normalizeManagedCliManifest(manifest.managedCli, source);
+  }
+  if (manifest.enabled === false) return undefined;
+  if (typeof manifest.version !== 'string' || !manifest.version.trim()) return undefined;
+  return {
+    version: manifest.version,
+    requiredCapabilities: manifest.requiredCapabilities ?? {},
+    assets: manifest.assets ?? {},
+    source,
+  };
+};
+
+export const loadManagedCliManifest = async (options = {}) => {
+  if (options.manifest && typeof options.manifest === 'object') {
+    return normalizeManagedCliManifest(options.manifest, 'argument');
+  }
+
+  const override = options.manifestPath
+    ?? process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH
+    ?? process.env.DENSITY_MANAGED_CLI_MANIFEST;
+  if (override) {
+    const manifest = looksLikeJson(override)
+      ? JSON.parse(override)
+      : JSON.parse(await readFile(localFilePath(override), 'utf8'));
+    return normalizeManagedCliManifest(manifest, override);
+  }
+
+  try {
+    const pluginManifest = JSON.parse(await readFile(pluginManifestPath(), 'utf8'));
+    const managedCli = pluginManifest.managedCli;
+    if (!managedCli || Object.keys(managedCli.assets ?? {}).length === 0) return undefined;
+    return normalizeManagedCliManifest(managedCli, pluginManifestPath());
+  } catch {
+    return undefined;
+  }
+};
+
+export const managedCliInstallDir = (manifest, options = {}) => path.join(
+  options.runtimeRoot ?? defaultManagedCliRuntimeRoot(),
+  manifest.version,
+  options.platform ?? managedCliPlatform()
+);
+
+export const managedCliBinPath = (manifest, options = {}) => path.join(
+  managedCliInstallDir(manifest, options),
+  'bin',
+  'density'
+);
+
+export const managedCliRuntimeStatus = async (manifest, options = {}) => {
+  if (!manifest) {
+    return { checked: false, installed: false, reason: 'Managed CLI manifest not configured.' };
+  }
+  const platform = options.platform ?? managedCliPlatform();
+  const runtimeDir = managedCliInstallDir(manifest, { ...options, platform });
+  const bin = path.join(runtimeDir, 'bin', 'density');
+  const installed = await executable(bin);
+  return {
+    checked: true,
+    installed,
+    version: manifest.version,
+    platform,
+    runtimeDir,
+    path: bin,
+    manifestSource: manifest.source,
+    reason: installed ? 'managed runtime installed' : 'managed runtime not installed',
+  };
+};
+
+export const missingRequiredCliCapabilities = (capabilities = {}, required = {}) => {
+  const missing = [];
+  if (!capabilities.checked) {
+    missing.push('capabilities');
+    return missing;
+  }
+
+  if (required.chartQuestions === true && !capabilities.chartQuestions) {
+    missing.push('chartQuestions');
+  }
+  if (required.availableBuildings === true && !capabilities.availableBuildings) {
+    missing.push('availableBuildings');
+  }
+  for (const command of required.commands ?? []) {
+    if (!capabilities.commands?.[command]) missing.push(`commands.${command}`);
+  }
+  if (required.questionAnswering?.localFirst === true && !capabilities.questionAnswering?.localFirst) {
+    missing.push('questionAnswering.localFirst');
+  }
+  return missing;
+};
 
 export const resolveDensityCli = async () => {
   if (process.env.DENSITY_CLI_COMMAND) {
     return { command: process.env.DENSITY_CLI_COMMAND, args: [], source: 'DENSITY_CLI_COMMAND', path: process.env.DENSITY_CLI_COMMAND, explicit: true };
   }
   if (process.env.DENSITY_CLI_BIN && await fileExists(process.env.DENSITY_CLI_BIN)) {
-    return { command: process.execPath, args: [process.env.DENSITY_CLI_BIN], source: 'DENSITY_CLI_BIN', path: process.env.DENSITY_CLI_BIN, explicit: true };
+    return { ...commandForCliBin(process.env.DENSITY_CLI_BIN), source: 'DENSITY_CLI_BIN', path: process.env.DENSITY_CLI_BIN, explicit: true };
+  }
+  const managedManifest = await loadManagedCliManifest();
+  const managed = await managedCliRuntimeStatus(managedManifest);
+  if (managed.installed) {
+    return {
+      command: managed.path,
+      args: [],
+      source: 'plugin-managed',
+      path: managed.path,
+      managed: true,
+      version: managed.version,
+      platform: managed.platform,
+      runtimeDir: managed.runtimeDir,
+    };
   }
   for (const repo of knownCliRepos()) {
     const bin = path.join(repo, 'bin', 'density.mjs');
@@ -132,6 +260,9 @@ export const ensureDensityCliBuilt = async (cli) => {
   if (!cli?.repo) return { built: false, reason: 'not a local repo cli' };
   const dist = path.join(cli.repo, 'dist', 'cli.js');
   if (await fileExists(dist)) return { built: false, reason: 'already built' };
+  if (process.env.DENSITY_CLI_BUILD_FROM_SOURCE !== '1') {
+    return { built: false, skipped: true, reason: 'source build skipped; set DENSITY_CLI_BUILD_FROM_SOURCE=1 for dev repo builds' };
+  }
   await run('npm', ['install'], { cwd: cli.repo });
   await run('npm', ['run', 'build'], { cwd: cli.repo });
   return { built: true, reason: 'built local repo cli' };
@@ -158,8 +289,142 @@ export const safeCliInfo = (cli) => cli
       args: cli.args,
       explicit: Boolean(cli.explicit),
       ambiguous: Boolean(cli.ambiguous),
+      managed: Boolean(cli.managed),
+      version: cli.version,
+      platform: cli.platform,
+      runtimeDir: cli.runtimeDir,
     }
   : undefined;
+
+const sha256File = async (file) => await new Promise((resolve, reject) => {
+  const hash = createHash('sha256');
+  const stream = createReadStream(file);
+  stream.on('data', (chunk) => hash.update(chunk));
+  stream.on('error', reject);
+  stream.on('end', () => resolve(hash.digest('hex')));
+});
+
+const assetSource = (asset = {}) => asset.url ?? asset.file ?? asset.path;
+const tarCommand = () => process.env.DENSITY_TAR_COMMAND
+  ?? (process.platform === 'win32' ? 'tar' : '/usr/bin/tar');
+
+const fetchOrCopyAsset = async (asset, outFile) => {
+  const source = assetSource(asset);
+  if (!source) throw new Error('Managed CLI asset is missing url, file, or path.');
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    if (!response.ok) throw new Error(`Managed CLI download failed (${response.status}).`);
+    if (!response.body) throw new Error('Managed CLI download returned an empty response body.');
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(outFile));
+    return { source, mode: 'download' };
+  }
+  await cp(localFilePath(source), outFile);
+  return { source, mode: 'copy' };
+};
+
+const validateTarMembers = async (archiveFile) => {
+  const listed = await run(tarCommand(), ['-tf', archiveFile], { allowFailure: true });
+  if (listed.code !== 0) throw new Error(listed.stderr || listed.stdout || 'Managed CLI archive could not be listed.');
+  for (const entry of listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+    const parts = entry.split('/').filter(Boolean);
+    if (path.isAbsolute(entry) || parts.includes('..')) {
+      throw new Error(`Managed CLI archive contains unsafe path: ${entry}`);
+    }
+  }
+};
+
+const assertSafeSymlinks = async (dir, root = dir) => {
+  for (const entry of await readdir(dir)) {
+    const entryPath = path.join(dir, entry);
+    const details = await lstat(entryPath);
+    if (details.isSymbolicLink()) {
+      const target = await readlink(entryPath);
+      const resolvedTarget = path.resolve(path.dirname(entryPath), target);
+      const relativeTarget = path.relative(root, resolvedTarget);
+      if (path.isAbsolute(target) || relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) {
+        throw new Error(`Managed CLI archive contains unsafe symlink: ${path.relative(root, entryPath)} -> ${target}`);
+      }
+      continue;
+    }
+    if (details.isDirectory()) await assertSafeSymlinks(entryPath, root);
+  }
+};
+
+const replaceDirectoryAtomically = async (fromDir, toDir) => {
+  await mkdir(path.dirname(toDir), { recursive: true });
+  const backup = `${toDir}.previous-${process.pid}-${Date.now()}`;
+  const hadExisting = await fileExists(toDir);
+  if (hadExisting) await rename(toDir, backup);
+  try {
+    await rename(fromDir, toDir);
+    if (hadExisting) await rm(backup, { recursive: true, force: true });
+  } catch (error) {
+    const targetMissing = !await fileExists(toDir);
+    const backupExists = await fileExists(backup);
+    if (hadExisting && targetMissing && backupExists) {
+      await rename(backup, toDir);
+    }
+    throw error;
+  }
+};
+
+export const installManagedCliRuntime = async (options = {}) => {
+  const manifest = await loadManagedCliManifest(options);
+  if (!manifest) throw new Error('Managed CLI manifest is not configured.');
+  const platform = options.platform ?? managedCliPlatform();
+  const asset = manifest.assets?.[platform];
+  if (!asset) throw new Error(`No managed CLI asset for ${platform} in manifest version ${manifest.version}.`);
+  if (!asset.sha256) throw new Error(`Managed CLI asset for ${platform} is missing sha256.`);
+
+  const runtimeRoot = options.runtimeRoot ?? defaultManagedCliRuntimeRoot();
+  await mkdir(runtimeRoot, { recursive: true });
+  const tempRoot = await mkdtemp(path.join(runtimeRoot, '.install-'));
+  const archiveFile = path.join(tempRoot, 'density-cli-runtime.tgz');
+  const extractDir = path.join(tempRoot, 'runtime');
+
+  try {
+    const fetched = await fetchOrCopyAsset(asset, archiveFile);
+    const actualSha256 = await sha256File(archiveFile);
+    if (actualSha256.toLowerCase() !== String(asset.sha256).toLowerCase()) {
+      throw new Error(`Managed CLI checksum mismatch: expected ${asset.sha256}, got ${actualSha256}.`);
+    }
+
+    await mkdir(extractDir, { recursive: true });
+    await validateTarMembers(archiveFile);
+    await run(tarCommand(), ['-xf', archiveFile, '-C', extractDir]);
+    await assertSafeSymlinks(extractDir);
+
+    const extractedBin = path.join(extractDir, 'bin', 'density');
+    if (!await fileExists(extractedBin)) {
+      throw new Error('Managed CLI archive must contain bin/density.');
+    }
+    await chmod(extractedBin, 0o755);
+
+    const cli = { command: extractedBin, args: [], source: 'plugin-managed-install', path: extractedBin };
+    const capabilities = await discoverCliCapabilities(cli, { dataDir: options.dataDir, timeoutMs: options.timeoutMs ?? 5000 });
+    const missing = missingRequiredCliCapabilities(capabilities, manifest.requiredCapabilities);
+    if (missing.length > 0) {
+      throw new Error(`Managed CLI is missing required capabilities: ${missing.join(', ')}.`);
+    }
+
+    const runtimeDir = managedCliInstallDir(manifest, { runtimeRoot, platform });
+    await replaceDirectoryAtomically(extractDir, runtimeDir);
+    const installedPath = path.join(runtimeDir, 'bin', 'density');
+    return {
+      ok: true,
+      path: installedPath,
+      source: fetched.source,
+      sourceMode: fetched.mode,
+      version: manifest.version,
+      platform,
+      runtimeDir,
+      sha256: actualSha256,
+      capabilities,
+    };
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+};
 
 const parquetFreshnessKey = async (dataDir) => {
   const parquetDir = path.join(dataDir ?? defaultDataDir(), 'parquet');

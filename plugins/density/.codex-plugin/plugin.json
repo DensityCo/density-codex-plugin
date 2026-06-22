@@ -1,6 +1,6 @@
 {
   "name": "density",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Local-first Density workplace analytics, building lifecycle readiness, floorplans, wayfinding, benchmarking, sensor health, and visual reports.",
   "author": {
     "name": "Density"
@@ -15,6 +15,21 @@
     "parquet",
     "charts"
   ],
+  "managedCli": {
+    "enabled": false,
+    "version": "0.1.0",
+    "requiredCapabilities": {
+      "commands": [
+        "availableBuildings",
+        "questionStarter",
+        "repairFastQuestions"
+      ],
+      "questionAnswering": {
+        "localFirst": true
+      }
+    },
+    "assets": {}
+  },
   "skills": "./skills/",
   "interface": {
     "displayName": "Density",

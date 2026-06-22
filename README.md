@@ -53,7 +53,9 @@ Benchmark and live wayfinding are separate source layers. Historical utilization
 
 Density uses local customer data through the Density CLI. If local data or auth is missing, the setup tool will tell you the next command to run.
 
-Setup is designed as one guided flow. After install, ask Codex to set up Density; it should run safe checks automatically and show one primary next action when auth, local data, fast-question inputs, or chart support is missing. Historical utilization should prefer local Parquet/DuckDB. Real-time wayfinding should use live availability rather than historical metrics.
+Setup is designed as one guided flow. After install, ask Codex to set up Density; it should run safe checks automatically and show one primary next action when the managed CLI runtime, auth, local data, fast-question inputs, or chart support is missing. Historical utilization should prefer local Parquet/DuckDB. Real-time wayfinding should use live availability rather than historical metrics.
+
+The normal CLI path is a plugin-managed runtime installed explicitly with the `install_managed_cli` MCP tool into `~/.density-cli/plugin-runtime/<version>/<platform-arch>/bin/density`. The tool copies or downloads the manifest-selected asset to a temporary path, verifies its SHA-256, extracts it, validates `density capabilities --format json`, and then swaps it into the cache. `DENSITY_CLI_COMMAND` and `DENSITY_CLI_BIN` remain explicit overrides; `DENSITY_CLI_REPO`, `DENSITY_CLI_BUILD_FROM_SOURCE=1`, and PATH are developer fallbacks.
 
 The default setup path prepares a fast starter preload. For broader customer-owned history, use `historical_export`; the plugin should not treat the starter preload as a limit on local data access.
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -17,6 +18,7 @@ import {
   floorUsageReport,
   historicalExport,
   historicalIntervalForDays,
+  installManagedCli,
   liveWayfindingStatus,
   localDataProfile,
   localUtilizationQuery,
@@ -28,7 +30,7 @@ import {
   setup,
   DEFAULT_METRICS_DAYS,
 } from '../scripts/density-core.mjs';
-import { resolveDensityCli, storageReport, which } from '../scripts/density-lib.mjs';
+import { managedCliPlatform, resolveDensityCli, storageReport, which } from '../scripts/density-lib.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -111,7 +113,7 @@ test('all Density skills carry the shared interaction contract', async () => {
 
 test('plugin manifest version reflects the progress-update interaction patch', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.6');
+  assert.equal(manifest.version, '0.1.7');
 });
 
 test('MCP tools/list exposes the default Density front door and routing guidance', async () => {
@@ -156,6 +158,10 @@ const withTempEnv = async (fn) => {
     DENSITY_CLI_COMMAND: process.env.DENSITY_CLI_COMMAND,
     DENSITY_CLI_REPO: process.env.DENSITY_CLI_REPO,
     DENSITY_CLI_DATA_DIR: process.env.DENSITY_CLI_DATA_DIR,
+    DENSITY_CLI_BUILD_FROM_SOURCE: process.env.DENSITY_CLI_BUILD_FROM_SOURCE,
+    DENSITY_MANAGED_CLI_MANIFEST: process.env.DENSITY_MANAGED_CLI_MANIFEST,
+    DENSITY_MANAGED_CLI_MANIFEST_PATH: process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH,
+    DENSITY_PLUGIN_RUNTIME_DIR: process.env.DENSITY_PLUGIN_RUNTIME_DIR,
     FAKE_CLI_LOG: process.env.FAKE_CLI_LOG,
     FAKE_CHART_SUPPORT: process.env.FAKE_CHART_SUPPORT,
     FAKE_AVAILABLE_BUILDINGS_SUPPORT: process.env.FAKE_AVAILABLE_BUILDINGS_SUPPORT,
@@ -454,6 +460,45 @@ const readFakeLog = async (file) => {
   }
 };
 
+const sha256File = async (file) => createHash('sha256')
+  .update(await readFile(file))
+  .digest('hex');
+
+const tarCommand = process.platform === 'win32' ? 'tar' : '/usr/bin/tar';
+
+const writeManagedCliArchive = async (tempDir) => {
+  const runtimeDir = path.join(tempDir, 'fixture-runtime');
+  const bin = path.join(runtimeDir, 'bin', 'density');
+  const archive = path.join(tempDir, 'density-runtime.tgz');
+  await writeFakeCli(bin);
+  await execFileAsync(tarCommand, ['-czf', archive, '-C', runtimeDir, '.']);
+  return {
+    archive,
+    sha256: await sha256File(archive),
+  };
+};
+
+const writeManagedCliManifest = async (tempDir, options = {}) => {
+  const manifestPath = path.join(tempDir, 'managed-cli-manifest.json');
+  const platform = options.platform ?? managedCliPlatform();
+  const asset = options.asset ?? (await writeManagedCliArchive(tempDir));
+  const manifest = {
+    version: options.version ?? '9.8.7',
+    requiredCapabilities: options.requiredCapabilities ?? {
+      commands: ['availableBuildings', 'questionStarter', 'repairFastQuestions'],
+      questionAnswering: { localFirst: true },
+    },
+    assets: {
+      [platform]: {
+        path: asset.archive,
+        sha256: options.sha256 ?? asset.sha256,
+      },
+    },
+  };
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  return { manifestPath, manifest, platform, asset };
+};
+
 const writeParquetTables = async (dataDir, tables = TABLES) => {
   const parquetDir = path.join(dataDir, 'parquet');
   await mkdir(parquetDir, { recursive: true });
@@ -667,7 +712,24 @@ test('setup does not check starter cache when the CLI lacks starter support', as
   });
 });
 
-test('setup reports one configure action when no CLI is discoverable', async () => {
+test('setup reports one managed install action when no CLI is discoverable', async () => {
+  await withTempEnv(async (tempDir) => {
+    process.env.HOME = tempDir;
+    process.env.PATH = tempDir;
+    const { manifestPath } = await writeManagedCliManifest(tempDir);
+    process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH = manifestPath;
+
+    const result = await setup({ dataDir: path.join(tempDir, 'data') });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.nextAction.id, 'install_managed_cli');
+    assert.equal(result.nextAction.tool, 'install_managed_cli');
+    assert.equal(result.userVisiblePrimaryActions, 1);
+    assert.equal(result.nextSteps.length, 1);
+  });
+});
+
+test('setup falls back to configure CLI when no managed asset is configured', async () => {
   await withTempEnv(async (tempDir) => {
     process.env.HOME = tempDir;
     process.env.PATH = tempDir;
@@ -677,7 +739,6 @@ test('setup reports one configure action when no CLI is discoverable', async () 
     assert.equal(result.ok, false);
     assert.equal(result.nextAction.id, 'configure_cli');
     assert.equal(result.userVisiblePrimaryActions, 1);
-    assert.equal(result.nextSteps.length, 1);
   });
 });
 
@@ -1489,19 +1550,114 @@ test('storage cache invalidates when a partitioned parquet file changes', async 
   });
 });
 
-test('repo-local CLI is preferred over PATH and provenance is reported', async () => {
+test('CLI resolution order prefers env overrides, managed runtime, then repo and PATH', async () => {
   await withTempEnv(async (tempDir) => {
+    const manifest = {
+      version: '7.6.5',
+      requiredCapabilities: {},
+      assets: {},
+    };
+    process.env.DENSITY_MANAGED_CLI_MANIFEST = JSON.stringify(manifest);
+    process.env.DENSITY_PLUGIN_RUNTIME_DIR = path.join(tempDir, 'runtime-cache');
+    const managedCli = path.join(process.env.DENSITY_PLUGIN_RUNTIME_DIR, manifest.version, managedCliPlatform(), 'bin', 'density');
+    await writeFakeCli(managedCli);
+
     const repoCli = path.join(tempDir, 'repo', 'bin', 'density.mjs');
     const pathCli = path.join(tempDir, 'bin', 'density');
+    const binCli = path.join(tempDir, 'explicit-density.mjs');
+    await writeFakeCli(binCli);
     await writeFakeCli(repoCli);
     await writeFakeCli(pathCli);
     process.env.DENSITY_CLI_REPO = path.join(tempDir, 'repo');
     process.env.PATH = `${path.dirname(pathCli)}${path.delimiter}${process.env.PATH ?? ''}`;
 
-    const cli = await resolveDensityCli();
+    let cli = await resolveDensityCli();
+    assert.equal(cli.path, managedCli);
+    assert.equal(cli.source, 'plugin-managed');
 
+    process.env.DENSITY_CLI_BIN = binCli;
+    cli = await resolveDensityCli();
+    assert.equal(cli.path, binCli);
+    assert.equal(cli.source, 'DENSITY_CLI_BIN');
+
+    process.env.DENSITY_CLI_COMMAND = 'density-from-command';
+    cli = await resolveDensityCli();
+    assert.equal(cli.command, 'density-from-command');
+    assert.equal(cli.source, 'DENSITY_CLI_COMMAND');
+
+    delete process.env.DENSITY_CLI_COMMAND;
+    delete process.env.DENSITY_CLI_BIN;
+    await rm(process.env.DENSITY_PLUGIN_RUNTIME_DIR, { recursive: true, force: true });
+    cli = await resolveDensityCli();
     assert.equal(cli.path, repoCli);
     assert.equal(cli.source, path.join(tempDir, 'repo'));
+
+    delete process.env.DENSITY_CLI_REPO;
+    cli = await resolveDensityCli();
+    assert.equal(cli.path, pathCli);
+    assert.equal(cli.source, 'PATH');
+  });
+});
+
+test('installManagedCli rejects a local fixture with a bad checksum', async () => {
+  await withTempEnv(async (tempDir) => {
+    process.env.HOME = tempDir;
+    process.env.DENSITY_PLUGIN_RUNTIME_DIR = path.join(tempDir, 'runtime-cache');
+    process.env.FAKE_STARTER_SUPPORT = '1';
+    const { manifestPath, manifest } = await writeManagedCliManifest(tempDir, {
+      sha256: '0'.repeat(64),
+    });
+    process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH = manifestPath;
+
+    const result = await installManagedCli({ dataDir: path.join(tempDir, 'data') });
+    const expectedPath = path.join(process.env.DENSITY_PLUGIN_RUNTIME_DIR, manifest.version, managedCliPlatform(), 'bin', 'density');
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /checksum mismatch/i);
+    await assert.rejects(readFile(expectedPath), /ENOENT/);
+  });
+});
+
+test('installManagedCli installs and validates a local fixture runtime', async () => {
+  await withTempEnv(async (tempDir) => {
+    process.env.HOME = tempDir;
+    process.env.DENSITY_PLUGIN_RUNTIME_DIR = path.join(tempDir, 'runtime-cache');
+    process.env.FAKE_STARTER_SUPPORT = '1';
+    const { manifestPath, manifest, asset } = await writeManagedCliManifest(tempDir);
+    process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH = manifestPath;
+
+    const installed = await installManagedCli({ dataDir: path.join(tempDir, 'data') });
+    const cli = await resolveDensityCli();
+
+    assert.equal(installed.ok, true);
+    assert.equal(installed.version, manifest.version);
+    assert.equal(installed.source, asset.archive);
+    assert.equal(installed.sourceMode, 'copy');
+    assert.equal(installed.sha256, asset.sha256);
+    assert.equal(installed.path, path.join(process.env.DENSITY_PLUGIN_RUNTIME_DIR, manifest.version, managedCliPlatform(), 'bin', 'density'));
+    assert.equal(installed.capabilities.checked, true);
+    assert.equal(installed.capabilities.commands.questionStarter, true);
+    assert.equal(cli.source, 'plugin-managed');
+    assert.equal(cli.path, installed.path);
+  });
+});
+
+test('setup asks to update managed CLI when required capabilities are absent', async () => {
+  await withTempEnv(async (tempDir) => {
+    process.env.HOME = tempDir;
+    process.env.DENSITY_PLUGIN_RUNTIME_DIR = path.join(tempDir, 'runtime-cache');
+    process.env.FAKE_STARTER_SUPPORT = '0';
+    const { manifestPath, manifest } = await writeManagedCliManifest(tempDir);
+    process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH = manifestPath;
+    const managedCli = path.join(process.env.DENSITY_PLUGIN_RUNTIME_DIR, manifest.version, managedCliPlatform(), 'bin', 'density');
+    await writeFakeCli(managedCli);
+
+    const result = await setup({ dataDir: path.join(tempDir, 'data') });
+
+    assert.equal(result.nextAction.id, 'install_managed_cli');
+    assert.deepEqual(result.nextAction.missingRequiredCapabilities, ['commands.questionStarter', 'questionAnswering.localFirst']);
+    assert.deepEqual(result.managedCli.missingRequiredCapabilities, ['commands.questionStarter', 'questionAnswering.localFirst']);
+    assert.equal(result.userVisiblePrimaryActions, 1);
   });
 });
 

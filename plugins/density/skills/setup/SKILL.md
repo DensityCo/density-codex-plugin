@@ -27,6 +27,7 @@ Keep user-visible progress updates at the workplace level:
 Prefer the plugin MCP tools when available:
 
 - `setup`
+- `install_managed_cli`
 - `auth_login`
 - `onboard_customer`
 - `historical_export`
@@ -41,13 +42,16 @@ Fallback scripts live in the plugin root under `scripts/`.
 ## Workflow
 
 1. Run setup or `node scripts/density-setup.mjs --json`.
-2. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
-3. If Parquet or fast-question inputs are missing, use `onboard_customer` for the starter preload.
-4. If generic Parquet exists but normalized fast-question metadata is missing and repair is available, use `repair_fast_questions`.
-5. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
-6. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
-7. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
-8. Use `historical_export` when the user wants broader customer-owned local history beyond the starter preload.
+2. If setup asks for the managed CLI runtime, use `install_managed_cli`. This is an explicit download/copy action that verifies the manifest checksum before installing into `~/.density-cli/plugin-runtime/`.
+3. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
+4. If Parquet or fast-question inputs are missing, use `onboard_customer` for the starter preload.
+5. If generic Parquet exists but normalized fast-question metadata is missing and repair is available, use `repair_fast_questions`.
+6. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
+7. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
+8. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
+9. Use `historical_export` when the user wants broader customer-owned local history beyond the starter preload.
+
+Normal setup should not run `npm install` or build the CLI from source. Use `DENSITY_CLI_REPO` plus `DENSITY_CLI_BUILD_FROM_SOURCE=1` only for explicit development work.
 
 ## Local Storage Contract
 
