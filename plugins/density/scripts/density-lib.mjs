@@ -7,6 +7,20 @@ import path from 'node:path';
 export const defaultDataDir = () => path.join(os.homedir(), '.density-cli');
 const latestPluginManifestUrl = () => process.env.DENSITY_PLUGIN_LATEST_MANIFEST_URL
   ?? 'https://raw.githubusercontent.com/DensityCo/density-codex-plugin/main/plugins/density/.codex-plugin/plugin.json';
+const capabilityCache = new Map();
+const storageCache = new Map();
+const CACHE_FINGERPRINT_TABLES = [
+  'resources',
+  'space_counts',
+  'space_events',
+  'space_occupancy',
+  'space_metrics',
+  'data_sources',
+  'external_records',
+  'spaces',
+  'space_labels',
+  'space_children',
+];
 
 export const fileExists = async (file) => {
   try {
@@ -147,27 +161,61 @@ export const safeCliInfo = (cli) => cli
     }
   : undefined;
 
+const parquetFreshnessKey = async (dataDir) => {
+  const parquetDir = path.join(dataDir ?? defaultDataDir(), 'parquet');
+  try {
+    const parts = [];
+    for (const table of CACHE_FINGERPRINT_TABLES) {
+      const flat = await summarizeParquetTarget(path.join(parquetDir, `${table}.parquet`));
+      const partitioned = await summarizeParquetTarget(path.join(parquetDir, table));
+      const files = flat.files + partitioned.files;
+      const bytes = flat.bytes + partitioned.bytes;
+      const modifiedAt = [flat.modifiedAt, partitioned.modifiedAt].filter(Boolean).sort().at(-1) ?? 'missing';
+      parts.push(`${table}:${files}:${bytes}:${modifiedAt}`);
+    }
+    return parts.join('|');
+  } catch {
+    return 'missing';
+  }
+};
+
 export const discoverCliCapabilities = async (cli, options = {}) => {
   if (!cli) {
     return { checked: false, chartQuestions: false, reason: 'Density CLI not found.' };
   }
+  const dataDir = options.dataDir ?? defaultDataDir();
+  const freshnessKey = await parquetFreshnessKey(dataDir);
+  const cacheKey = JSON.stringify({
+    cli: cli.path ?? cli.command,
+    dataDir,
+    freshnessKey,
+  });
+  if (capabilityCache.has(cacheKey)) return capabilityCache.get(cacheKey);
   const result = await runDensity(cli, ['capabilities', '--format', 'json'], {
     allowFailure: true,
     timeoutMs: options.timeoutMs ?? 5000,
-    dataDir: options.dataDir,
+    dataDir,
   });
   if (result.code !== 0) {
-    return {
+    const failed = {
       checked: false,
       chartQuestions: false,
       reason: result.timedOut ? 'Capability check timed out.' : (result.stderr || result.stdout || 'Capability check failed.'),
     };
+    capabilityCache.set(cacheKey, failed);
+    return failed;
   }
   try {
     const payload = JSON.parse(result.stdout);
-    return {
+    const availableBuildings = Boolean(
+      payload.commands?.availableBuildings
+      || payload.availableBuildings === true
+      || payload.availableBuildings?.supported === true
+    );
+    const capabilities = {
       checked: true,
       version: typeof payload.version === 'string' ? payload.version : undefined,
+      availableBuildings,
       chartQuestions: Boolean(payload.chartQuestions || payload.commands?.askChart),
       chartContract: payload.chartContract,
       htmlReports: Array.isArray(payload.htmlReports) ? payload.htmlReports : [],
@@ -175,12 +223,16 @@ export const discoverCliCapabilities = async (cli, options = {}) => {
       questionAnswering: payload.questionAnswering,
       commands: payload.commands ?? {},
     };
+    capabilityCache.set(cacheKey, capabilities);
+    return capabilities;
   } catch (error) {
-    return {
+    const failed = {
       checked: false,
       chartQuestions: false,
       reason: `Capability JSON was not parseable: ${error.message}`,
     };
+    capabilityCache.set(cacheKey, failed);
+    return failed;
   }
 };
 
@@ -209,7 +261,7 @@ export const renderPng = async (svgFile) => {
   return result.code === 0 ? pngFile : undefined;
 };
 
-const summarizeParquetTarget = async (target) => {
+async function summarizeParquetTarget(target) {
   let targetStat;
   try {
     targetStat = await stat(target);
@@ -249,7 +301,7 @@ const summarizeParquetTarget = async (target) => {
     bytes,
     modifiedAt: files > 0 ? new Date(newestMtime).toISOString() : undefined,
   };
-};
+}
 
 const summarizeParquetTable = async (parquetDir, table) => {
   const flat = await summarizeParquetTarget(path.join(parquetDir, `${table}.parquet`));
@@ -267,6 +319,9 @@ const summarizeParquetTable = async (parquetDir, table) => {
 };
 
 export const storageReport = async (dataDir) => {
+  const freshnessKey = await parquetFreshnessKey(dataDir);
+  const cacheKey = JSON.stringify({ dataDir, freshnessKey });
+  if (storageCache.has(cacheKey)) return storageCache.get(cacheKey);
   const duckdbFile = path.join(dataDir, 'density.duckdb');
   const parquetDir = path.join(dataDir, 'parquet');
   const tableFiles = [
@@ -290,7 +345,7 @@ export const storageReport = async (dataDir) => {
   const duckdbBytes = await fileSize(duckdbFile);
   const parquetReady = tables.every((table) => table.present);
   const fastQuestionsReady = fastQuestionTables.every((table) => table.present);
-  return {
+  const report = {
     dataDir,
     duckdbFile,
     parquetDir,
@@ -305,6 +360,157 @@ export const storageReport = async (dataDir) => {
     fastQuestionsReady,
     ratio: parquetBytes > 0 ? Number((duckdbBytes / parquetBytes).toFixed(2)) : undefined,
     parquetFirst: parquetReady,
+  };
+  storageCache.set(cacheKey, report);
+  return report;
+};
+
+const sq = (value) => String(value).replace(/'/g, "''");
+
+const parquetRelation = async (parquetDir, table) => {
+  const flat = path.join(parquetDir, `${table}.parquet`);
+  if (await fileExists(flat)) return `read_parquet('${sq(flat)}')`;
+  const directory = path.join(parquetDir, table);
+  if (await fileExists(directory)) return `read_parquet('${sq(path.join(directory, '**', '*.parquet'))}', hive_partitioning = true)`;
+  return undefined;
+};
+
+const csvFields = (stdout) => String(stdout ?? '').trim().split(',').map((field) => field.trim());
+
+const duckdbCsv = async (duckdb, sql) => {
+  const result = await run(duckdb, ['-csv', '-noheader', '-c', sql], {
+    allowFailure: true,
+    timeoutMs: 10000,
+  });
+  if (result.code !== 0 || result.timedOut) {
+    return {
+      ok: false,
+      error: result.timedOut ? 'DuckDB profile query timed out.' : (result.stderr || result.stdout || 'DuckDB profile query failed.'),
+    };
+  }
+  return { ok: true, fields: csvFields(result.stdout) };
+};
+
+const numberField = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+};
+
+const profileCount = async (duckdb, relation, table) => {
+  const result = await duckdbCsv(duckdb, `SELECT COUNT(*) FROM ${relation};`);
+  if (!result.ok) return { table, ok: false, error: result.error };
+  return { table, ok: true, rows: numberField(result.fields[0]) ?? 0 };
+};
+
+const profileTimestampTable = async (duckdb, relation, table) => {
+  const result = await duckdbCsv(duckdb, `
+    SELECT
+      COUNT(*) AS rows,
+      CAST(MIN(timestamp) AS VARCHAR) AS first_timestamp,
+      CAST(MAX(timestamp) AS VARCHAR) AS last_timestamp,
+      COUNT(DISTINCT organization_id) AS organizations,
+      COUNT(DISTINCT space_id) AS spaces
+    FROM ${relation};
+  `);
+  if (!result.ok) return { table, ok: false, error: result.error };
+  const [rows, firstTimestamp, lastTimestamp, organizations, spaces] = result.fields;
+  return {
+    table,
+    ok: true,
+    rows: numberField(rows) ?? 0,
+    firstTimestamp: firstTimestamp || undefined,
+    lastTimestamp: lastTimestamp || undefined,
+    organizations: numberField(organizations),
+    spaces: numberField(spaces),
+  };
+};
+
+const profileSpaceMetrics = async (duckdb, relation) => {
+  const result = await duckdbCsv(duckdb, `
+    SELECT
+      COUNT(*) AS rows,
+      CAST(MIN(timestamp) AS VARCHAR) AS first_timestamp,
+      CAST(MAX(timestamp) AS VARCHAR) AS last_timestamp,
+      COUNT(DISTINCT organization_id) AS organizations,
+      COUNT(DISTINCT space_id) AS spaces,
+      SUM(CASE WHEN occupancy_avg IS NULL THEN 1 ELSE 0 END) AS occupancy_avg_null_rows,
+      SUM(CASE WHEN COALESCE(time_used_raw, 0) = 0 THEN 1 ELSE 0 END) AS time_used_zero_rows,
+      SUM(CASE WHEN up_time IS NOT NULL AND up_time <= 0.8 THEN 1 ELSE 0 END) AS low_uptime_rows
+    FROM ${relation};
+  `);
+  if (!result.ok) return { table: 'space_metrics', ok: false, error: result.error };
+  const [
+    rows,
+    firstTimestamp,
+    lastTimestamp,
+    organizations,
+    spaces,
+    occupancyAvgNullRows,
+    timeUsedZeroRows,
+    lowUptimeRows,
+  ] = result.fields;
+  return {
+    table: 'space_metrics',
+    ok: true,
+    rows: numberField(rows) ?? 0,
+    firstTimestamp: firstTimestamp || undefined,
+    lastTimestamp: lastTimestamp || undefined,
+    organizations: numberField(organizations),
+    spaces: numberField(spaces),
+    nullRates: {
+      occupancyAvg: numberField(rows) ? Number(((numberField(occupancyAvgNullRows) ?? 0) / numberField(rows)).toFixed(4)) : undefined,
+    },
+    zeroRates: {
+      timeUsed: numberField(rows) ? Number(((numberField(timeUsedZeroRows) ?? 0) / numberField(rows)).toFixed(4)) : undefined,
+    },
+    lowUptimeRows: numberField(lowUptimeRows) ?? 0,
+  };
+};
+
+export const localDataProfileReport = async (dataDir) => {
+  const storage = await storageReport(dataDir);
+  const duckdb = await which('duckdb');
+  if (!duckdb) {
+    return {
+      checked: false,
+      reason: 'DuckDB CLI not found; file-level storage readiness is still available.',
+      storage,
+    };
+  }
+
+  const tableProfiles = [];
+  for (const table of storage.tables) {
+    if (!table.present) continue;
+    const relation = await parquetRelation(storage.parquetDir, table.table);
+    if (!relation) continue;
+    if (table.table === 'space_metrics') {
+      tableProfiles.push(await profileSpaceMetrics(duckdb, relation));
+    } else if (['space_occupancy', 'space_counts', 'space_events'].includes(table.table)) {
+      tableProfiles.push(await profileTimestampTable(duckdb, relation, table.table));
+    } else {
+      tableProfiles.push(await profileCount(duckdb, relation, table.table));
+    }
+  }
+
+  const timestamped = tableProfiles.filter((table) => table.ok && table.firstTimestamp && table.lastTimestamp);
+  const firstTimestamp = timestamped.map((table) => table.firstTimestamp).sort()[0];
+  const lastTimestamp = timestamped.map((table) => table.lastTimestamp).sort().at(-1);
+  const failedProfiles = tableProfiles.filter((table) => !table.ok);
+  return {
+    checked: true,
+    reason: timestamped.length > 0
+      ? 'DuckDB profiled local Parquet timestamps and row counts.'
+      : failedProfiles.length > 0
+        ? 'DuckDB was available, but timestamp coverage could not be profiled from local Parquet.'
+        : 'DuckDB found no timestamped local Parquet tables to profile.',
+    storage,
+    duckdb,
+    tables: tableProfiles,
+    coverage: {
+      firstTimestamp,
+      lastTimestamp,
+      timestampTables: timestamped.map((table) => table.table),
+    },
   };
 };
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Benchmarking"
+  short_description: "Compare Density usage to benchmarks."
+  default_prompt: "Use $benchmarking to compare Density utilization against benchmark methodology."

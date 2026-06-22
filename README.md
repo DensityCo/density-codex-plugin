@@ -2,7 +2,7 @@
 
 This repository is a Codex marketplace for the Density plugin.
 
-Density lets Codex set up the local Density CLI, inspect local Density data, and answer workplace analytics questions when the installed CLI exposes chart support.
+Density lets Codex set up the local Density CLI, inspect local Density data, check building status/go-live readiness before analysis, answer historical workplace analytics questions from local Parquet/DuckDB, show live wayfinding availability when available, and render visual artifacts with one shared design contract.
 
 ## Install
 
@@ -27,7 +27,7 @@ Ask Codex:
 Set up Density
 ```
 
-Then ask a chart question:
+Then ask a local data question:
 
 ```text
 Which rooms are busiest?
@@ -39,9 +39,25 @@ or:
 Show me a pie chart of space type breakdown
 ```
 
+Or ask for a specific Density workflow:
+
+```text
+Use $utilization to rank the busiest conference rooms.
+Use $wayfinding to show open phone booths on a floorplan.
+Use $benchmarking to compare this floor against benchmark methodology.
+Use $sensor-health to explain why this floor's live signal looks stale.
+Use $data-health to diagnose why local utilization is showing zeros.
+```
+
+Benchmark and live wayfinding are separate source layers. Historical utilization should come from local Parquet/DuckDB; peer context should come from Density benchmark-network access; current availability should come from the live feed. Building status and go-live readiness should stay visible whenever a response or artifact uses a planning, inactive, retired, future-go-live, or unknown-go-live building.
+
 Density uses local customer data through the Density CLI. If local data or auth is missing, the setup tool will tell you the next command to run.
 
-Setup is designed as one guided flow. After install, ask Codex to set up Density; it should run safe checks automatically and show one primary next action when auth, local data, or chart support is missing. If the current CLI does not support chart questions, Codex should say that directly instead of pretending a chart was generated.
+Setup is designed as one guided flow. After install, ask Codex to set up Density; it should run safe checks automatically and show one primary next action when auth, local data, fast-question inputs, or chart support is missing. Historical utilization should prefer local Parquet/DuckDB. Real-time wayfinding should use live availability rather than historical metrics.
+
+The default setup path prepares a fast starter preload. For broader customer-owned history, use `historical_export`; the plugin should not treat the starter preload as a limit on local data access.
+
+The plugin ships one visual design contract at `plugins/density/assets/design.md`. Edit that file when a customer-specific artifact style is needed.
 
 ## Marketplace Layout
 

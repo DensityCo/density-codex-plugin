@@ -1,10 +1,11 @@
 {
   "name": "density",
-  "version": "0.1.2",
-  "description": "Set up local Density data and render Broadsheet-style answers inline when the CLI supports chart questions.",
+  "version": "0.1.6",
+  "description": "Local-first Density workplace analytics, building lifecycle readiness, floorplans, wayfinding, benchmarking, sensor health, and visual reports.",
   "author": {
     "name": "Density"
   },
+  "website": "https://density.io/",
   "homepage": "https://density.io/",
   "license": "MIT",
   "keywords": [
@@ -17,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Density",
-    "shortDescription": "Set up local Density data and chart when supported.",
-    "longDescription": "Density helps Codex install or find the Density CLI, verify local Parquet-first storage, prepare customer data through a guided setup flow, check chart capability, and return concise title/subtitle/chart answers when the CLI supports them.",
+    "shortDescription": "Activate local Density data, then add live and benchmark context.",
+    "longDescription": "Density helps Codex install or find the Density CLI, verify local Parquet-first storage, check building status/go-live readiness before analysis, prepare customer data, answer historical utilization questions from local DuckDB/Parquet, render floorplan and chart artifacts with one shared design contract, use the live feed for current wayfinding, and keep benchmark-network context display-safe and separate from customer-owned local data.",
     "developerName": "Density",
     "category": "Productivity",
     "capabilities": [
@@ -27,11 +28,13 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Set up Density for local chart questions",
-      "Ask Density what rooms are busiest",
-      "Show a Density space type breakdown"
+      "Set up Density and ask my first local question",
+      "Ask Density what rooms are busiest from local data",
+      "Diagnose whether my local Density data is trustworthy",
+      "Show what live wayfinding or benchmark context would add"
     ],
     "brandColor": "#8C2F1D",
+    "website": "https://density.io/",
     "composerIcon": "./assets/density-icon.png",
     "logo": "./assets/density-icon.png"
   },
