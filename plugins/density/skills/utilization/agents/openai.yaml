@@ -1,0 +1,4 @@
+interface:
+  display_name: "Utilization"
+  short_description: "Analyze historical Density utilization."
+  default_prompt: "Use $utilization to answer a historical Density utilization question from local data."

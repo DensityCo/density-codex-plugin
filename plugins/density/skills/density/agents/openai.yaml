@@ -1,0 +1,4 @@
+interface:
+  display_name: "Density"
+  short_description: "Route Density analytics and setup work."
+  default_prompt: "Use $density to route my Density analytics, setup, floorplan, wayfinding, or health request."

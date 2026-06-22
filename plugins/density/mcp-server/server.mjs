@@ -1,6 +1,25 @@
 #!/usr/bin/env node
 import { pluginVersion, storageReport } from '../scripts/density-lib.mjs';
-import { askChart, authLogin, boundedGenericDays, onboardCustomer, repairFastQuestions, resolveDataDir, setup, starterQuestions } from '../scripts/density-core.mjs';
+import {
+  answerDensityQuestion,
+  askChart,
+  authLogin,
+  availableBuildings,
+  benchmarkCompare,
+  boundedGenericDays,
+  dataHealthReport,
+  floorUsageReport,
+  historicalExport,
+  liveWayfindingStatus,
+  localDataProfile,
+  localUtilizationQuery,
+  onboardCustomer,
+  repairFastQuestions,
+  resolveDataDir,
+  sensorHealthReport,
+  setup,
+  starterQuestions,
+} from '../scripts/density-core.mjs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,15 +39,25 @@ const tools = [
     },
     additionalProperties: false,
   }),
-  tool('onboard_customer', 'Prepare local customer data with staged setup by default; full metrics sync requires explicit fullSync.', {
+  tool('onboard_customer', 'Prepare a starter local customer dataset with staged setup by default; full preload sync requires explicit fullSync.', {
     type: 'object',
     properties: {
       dataDir: { type: 'string' },
       orgId: { type: 'string', description: 'Optional organization id to select before syncing.' },
-      days: { type: 'number', minimum: 1, maximum: 14, description: 'Metrics preload window. Defaults to 14 days; windows over 7 days use hourly metrics.' },
-      fullSync: { type: 'boolean', description: 'Run long metrics/occupancy/export phases. Defaults false.' },
+      days: { type: 'number', minimum: 1, maximum: 14, description: 'Starter metrics preload window. Defaults to 14 days; windows over 7 days use hourly metrics.' },
+      fullSync: { type: 'boolean', description: 'Run starter preload metrics/occupancy/export phases. Defaults false.' },
       prewarmQuestions: { type: 'boolean', description: 'After full sync, precompute starter-question answers and chart artifacts when supported. Defaults true.' },
       timeoutSeconds: { type: 'number', minimum: 1, maximum: 600, description: 'Per-command timeout for explicit full sync.' },
+    },
+    additionalProperties: false,
+  }),
+  tool('historical_export', 'Export a larger customer-owned local history window to Parquet. Separate from the fast 14-day starter preload.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string' },
+      orgId: { type: 'string', description: 'Optional organization id to select before exporting.' },
+      days: { type: 'number', minimum: 1, maximum: 365, description: 'Historical local export window. Defaults to 90 days.' },
+      timeoutSeconds: { type: 'number', minimum: 1, maximum: 3600, description: 'Per-command timeout for historical export. Defaults to 600 seconds.' },
     },
     additionalProperties: false,
   }),
@@ -41,13 +70,97 @@ const tools = [
     },
     additionalProperties: false,
   }),
-  tool('ask_chart', 'Ask a natural-language question and return title, subtitle, structured UI when supported, and SVG/HTML/PNG chart artifacts.', {
+  tool('answer_density_question', 'Default front door for ordinary Density questions. Use for natural-language Density questions before narrower tools, especially broad prompts like "pick any building" or "compare any one site"; routes internally through historical, live wayfinding, floorplan, data health, or sensor health surfaces. Do not use shell, DuckDB, SQL, manual CLI commands, or hand-built chart scripts for ordinary questions.', {
+    type: 'object',
+    properties: {
+      question: { type: 'string' },
+      dataDir: { type: 'string', description: 'Density local data dir. Defaults to DENSITY_CLI_DATA_DIR or ~/.density-cli.' },
+      intentHint: { type: 'string', description: 'Optional caller hint such as historical, live, floorplan, data-health, or sensor-health. The router still validates from the question.' },
+    },
+    required: ['question'],
+    additionalProperties: false,
+  }),
+  tool('ask_chart', 'Compatibility-only. Use for legacy chart artifact callers that already expect ask_chart output; prefer answer_density_question or local_utilization_query for ordinary Density questions.', {
     type: 'object',
     properties: {
       question: { type: 'string' },
       dataDir: { type: 'string' },
     },
     required: ['question'],
+    additionalProperties: false,
+  }),
+  tool('local_utilization_query', 'Use for historical utilization, trends, rankings, busiest/least-used spaces, and local customer-owned analytics when the scope is already clear. For broad "any building/site" prompts, use answer_density_question first. Do not use for live availability, sensor health, benchmark peer context, shell, DuckDB, SQL, or manual Parquet fallbacks.', {
+    type: 'object',
+    properties: {
+      question: { type: 'string' },
+      dataDir: { type: 'string' },
+    },
+    required: ['question'],
+    additionalProperties: false,
+  }),
+  tool('floor_usage_report', 'Use for floorplan, map, spatial overlay, heatmap, or visual floor-usage artifact requests. Historical utilization only; live walkable availability belongs in live_wayfinding_status.', {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: 'Optional user prompt that requested the floorplan artifact.' },
+      dataDir: { type: 'string' },
+      outFile: { type: 'string', description: 'Optional destination HTML file. Defaults to the Density artifacts directory.' },
+      timeoutMs: { type: 'number', minimum: 1, maximum: 120000 },
+    },
+    additionalProperties: false,
+  }),
+  tool('local_data_profile', 'Profile local customer-owned Density data readiness and freshness without using benchmark or live-feed sources.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string' },
+      window: { type: 'string', description: 'Optional user-requested time window to describe coverage expectations.' },
+    },
+    additionalProperties: false,
+  }),
+  tool('available_buildings', 'List building readiness before analysis: live/planning status, go-live state, metric coverage, geometry, chart queryability, and live wayfinding eligibility.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string' },
+      timeoutMs: { type: 'number', minimum: 1, maximum: 120000 },
+    },
+    additionalProperties: false,
+  }),
+  tool('data_health_report', 'Use for local data readiness, freshness, missing rows, stale data, zero charts, sync gaps, and trust diagnostics for historical analytics.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string' },
+      window: { type: 'string' },
+    },
+    additionalProperties: false,
+  }),
+  tool('live_wayfinding_status', 'Use for current, now, live, open, free, occupied, or available space questions. Reads the live feed and returns liveAvailable false rather than substituting historical data.', {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+      floorId: { type: 'string' },
+      dataDir: { type: 'string' },
+      timeoutMs: { type: 'number', minimum: 1, maximum: 30000 },
+      maxAgeSeconds: { type: 'number', minimum: 1, maximum: 300 },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  }),
+  tool('benchmark_compare', 'Use for benchmark, peer, cohort, percentile, or market comparison questions when an approved Density benchmark source is connected. Never returns raw peer rows.', {
+    type: 'object',
+    properties: {
+      metric: { type: 'string' },
+      cohort: { type: 'object', additionalProperties: true },
+      customerMetric: { type: 'object', additionalProperties: true },
+    },
+    additionalProperties: false,
+  }),
+  tool('sensor_health_report', 'Use for sensor health, offline/stale/degraded sensors, mapping status, live signal health, and operational readiness. Cloud-only; no DuckDB or Parquet fallback.', {
+    type: 'object',
+    properties: {
+      organizationId: { type: 'string' },
+      buildingId: { type: 'string' },
+      floorId: { type: 'string' },
+      spaceIds: { type: 'array', items: { type: 'string' } },
+    },
     additionalProperties: false,
   }),
   tool('storage_report', 'Report DuckDB and Parquet sizes for a Density local data dir.', {
@@ -107,7 +220,7 @@ async function handleRawMessage(raw) {
       sendResult(message.id, {
         protocolVersion: message.params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.2' },
+        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.6' },
       });
       return;
     }
@@ -140,10 +253,30 @@ async function callTool(name, args) {
       return jsonTool(await authLogin(args));
     case 'onboard_customer':
       return jsonTool(await onboardCustomer(args));
+    case 'historical_export':
+      return jsonTool(await historicalExport(args));
     case 'create_demo_customer':
       return jsonTool(await createDemoCustomer(args));
+    case 'answer_density_question':
+      return jsonTool(await answerDensityQuestion(args));
     case 'ask_chart':
       return jsonTool(await askChart(args));
+    case 'local_utilization_query':
+      return jsonTool(await localUtilizationQuery(args));
+    case 'floor_usage_report':
+      return jsonTool(await floorUsageReport(args));
+    case 'local_data_profile':
+      return jsonTool(await localDataProfile(args));
+    case 'available_buildings':
+      return jsonTool(await availableBuildings(args));
+    case 'data_health_report':
+      return jsonTool(await dataHealthReport(args));
+    case 'live_wayfinding_status':
+      return jsonTool(await liveWayfindingStatus(args));
+    case 'benchmark_compare':
+      return jsonTool(await benchmarkCompare(args));
+    case 'sensor_health_report':
+      return jsonTool(await sensorHealthReport(args));
     case 'storage_report':
       return jsonTool(await storageReport(resolveDataDir(args.dataDir)));
     case 'starter_questions':
