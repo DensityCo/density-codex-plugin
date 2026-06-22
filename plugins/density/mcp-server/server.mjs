@@ -10,6 +10,7 @@ import {
   dataHealthReport,
   floorUsageReport,
   historicalExport,
+  installManagedCli,
   liveWayfindingStatus,
   localDataProfile,
   localUtilizationQuery,
@@ -29,6 +30,17 @@ const tools = [
     type: 'object',
     properties: {
       dataDir: { type: 'string', description: 'Density local data dir. Defaults to DENSITY_CLI_DATA_DIR or ~/.density-cli.' },
+    },
+    additionalProperties: false,
+  }),
+  tool('install_managed_cli', 'Explicitly install or update the plugin-managed Density CLI runtime from the configured verified manifest.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string', description: 'Density local data dir used only for capability validation. Defaults to DENSITY_CLI_DATA_DIR or ~/.density-cli.' },
+      manifestPath: { type: 'string', description: 'Optional local manifest path or file:// URL. Defaults to the plugin manifest or DENSITY_MANAGED_CLI_MANIFEST(_PATH).' },
+      platform: { type: 'string', description: 'Optional platform-arch key such as darwin-arm64. Defaults to the current platform.' },
+      runtimeRoot: { type: 'string', description: 'Optional runtime cache root. Defaults to ~/.density-cli/plugin-runtime.' },
+      timeoutMs: { type: 'number', minimum: 1, maximum: 120000 },
     },
     additionalProperties: false,
   }),
@@ -220,7 +232,7 @@ async function handleRawMessage(raw) {
       sendResult(message.id, {
         protocolVersion: message.params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.6' },
+        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.7' },
       });
       return;
     }
@@ -249,6 +261,8 @@ async function callTool(name, args) {
   switch (name) {
     case 'setup':
       return jsonTool(await setup(args));
+    case 'install_managed_cli':
+      return jsonTool(await installManagedCli(args));
     case 'auth_login':
       return jsonTool(await authLogin(args));
     case 'onboard_customer':

@@ -26,6 +26,7 @@ const EXPECTED_SKILLS = [
 
 const EXPECTED_MCP_TOOLS = [
   'setup',
+  'install_managed_cli',
   'auth_login',
   'onboard_customer',
   'historical_export',
