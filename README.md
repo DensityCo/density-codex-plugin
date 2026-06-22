@@ -57,6 +57,8 @@ Setup is designed as one guided flow. After install, ask Codex to set up Density
 
 The normal CLI path is a plugin-managed runtime installed explicitly with the `install_managed_cli` MCP tool into `~/.density-cli/plugin-runtime/<version>/<platform-arch>/bin/density`. The tool copies or downloads the manifest-selected asset to a temporary path, verifies its SHA-256, extracts it, validates `density capabilities --format json`, and then swaps it into the cache. `DENSITY_CLI_COMMAND` and `DENSITY_CLI_BIN` remain explicit overrides; `DENSITY_CLI_REPO`, `DENSITY_CLI_BUILD_FROM_SOURCE=1`, and PATH are developer fallbacks.
 
+The first managed runtime asset is published for `darwin-arm64`. Other platforms should use an explicit CLI until their runtime asset is published.
+
 The default setup path prepares a fast starter preload. For broader customer-owned history, use `historical_export`; the plugin should not treat the starter preload as a limit on local data access.
 
 The plugin ships one visual design contract at `plugins/density/assets/design.md`. Edit that file when a customer-specific artifact style is needed.

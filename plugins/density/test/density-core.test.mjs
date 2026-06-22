@@ -114,6 +114,9 @@ test('all Density skills carry the shared interaction contract', async () => {
 test('plugin manifest version reflects the progress-update interaction patch', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
   assert.equal(manifest.version, '0.1.7');
+  assert.equal(manifest.managedCli.enabled, true);
+  assert.ok(manifest.managedCli.assets['darwin-arm64'].url);
+  assert.match(manifest.managedCli.assets['darwin-arm64'].sha256, /^[a-f0-9]{64}$/);
 });
 
 test('MCP tools/list exposes the default Density front door and routing guidance', async () => {
@@ -729,15 +732,18 @@ test('setup reports one managed install action when no CLI is discoverable', asy
   });
 });
 
-test('setup falls back to configure CLI when no managed asset is configured', async () => {
+test('setup falls back to configure CLI when no managed asset is available for this platform', async () => {
   await withTempEnv(async (tempDir) => {
     process.env.HOME = tempDir;
     process.env.PATH = tempDir;
+    const { manifestPath } = await writeManagedCliManifest(tempDir, { platform: 'not-this-platform' });
+    process.env.DENSITY_MANAGED_CLI_MANIFEST_PATH = manifestPath;
 
     const result = await setup({ dataDir: path.join(tempDir, 'data') });
 
     assert.equal(result.ok, false);
     assert.equal(result.nextAction.id, 'configure_cli');
+    assert.equal(result.managedCli.runtime.assetAvailable, false);
     assert.equal(result.userVisiblePrimaryActions, 1);
   });
 });

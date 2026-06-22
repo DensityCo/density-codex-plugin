@@ -188,15 +188,21 @@ export const managedCliRuntimeStatus = async (manifest, options = {}) => {
   const runtimeDir = managedCliInstallDir(manifest, { ...options, platform });
   const bin = path.join(runtimeDir, 'bin', 'density');
   const installed = await executable(bin);
+  const assetAvailable = Boolean(manifest.assets?.[platform]);
   return {
     checked: true,
     installed,
+    assetAvailable,
     version: manifest.version,
     platform,
     runtimeDir,
     path: bin,
     manifestSource: manifest.source,
-    reason: installed ? 'managed runtime installed' : 'managed runtime not installed',
+    reason: installed
+      ? 'managed runtime installed'
+      : assetAvailable
+        ? 'managed runtime not installed'
+        : `managed runtime asset unavailable for ${platform}`,
   };
 };
 

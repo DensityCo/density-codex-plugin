@@ -543,6 +543,7 @@ export async function setup(args = {}) {
   const update = await checkPluginUpdate();
   const usableCliSelected = Boolean(cli) && missingRequiredCapabilities.length === 0;
   const managedInstallNeeded = Boolean(managedManifest)
+    && managedRuntime.assetAvailable
     && !cli?.explicit
     && !usableCliSelected
     && (!managedRuntime.installed || missingRequiredCapabilities.length > 0);

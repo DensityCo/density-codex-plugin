@@ -16,7 +16,7 @@
     "charts"
   ],
   "managedCli": {
-    "enabled": false,
+    "enabled": true,
     "version": "0.1.0",
     "requiredCapabilities": {
       "commands": [
@@ -28,7 +28,12 @@
         "localFirst": true
       }
     },
-    "assets": {}
+    "assets": {
+      "darwin-arm64": {
+        "url": "https://github.com/DensityCo/density-codex-plugin/releases/download/density-cli-runtime-v0.1.0/density-cli-v0.1.0-darwin-arm64.tar.gz",
+        "sha256": "f9112465d9d01ee11eb1e1303704b22d22d08cf395994a763c775ff8159ab057"
+      }
+    }
   },
   "skills": "./skills/",
   "interface": {
