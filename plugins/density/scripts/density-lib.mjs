@@ -89,6 +89,34 @@ export const run = async (command, args = [], options = {}) => {
   return result;
 };
 
+const REQUIRED_CLI_NODE_RANGE = '>=24 <25';
+
+const parseNodeMajor = (version) => {
+  const match = String(version ?? '').trim().match(/^v?(\d+)\./);
+  return match ? Number(match[1]) : undefined;
+};
+
+const checkCliInstallNode = async () => {
+  const result = await run('node', ['--version'], { allowFailure: true, timeoutMs: 5000 });
+  const version = result.stdout.trim() || result.stderr.trim();
+  const major = parseNodeMajor(version);
+  if (result.code !== 0 || major === undefined) {
+    return {
+      ok: false,
+      version,
+      message: 'Could not determine the Node.js version used for Density CLI install.',
+    };
+  }
+  if (major >= 24 && major < 25) {
+    return { ok: true, version };
+  }
+  return {
+    ok: false,
+    version,
+    message: `Density CLI install requires Node.js ${REQUIRED_CLI_NODE_RANGE}; found ${version}. The CLI depends on duckdb, which may fall back to a slow native compile or fail when npm runs under an unsupported Node version. Switch to Node 24, then rerun setup or run npm install && npm run build in the Density CLI checkout.`,
+  };
+};
+
 const knownCliRepos = () => [
   process.env.DENSITY_CLI_REPO,
   path.join(os.homedir(), 'dev', 'density-cli'),
@@ -118,6 +146,10 @@ export const ensureDensityCliBuilt = async (cli) => {
   if (!cli?.repo) return { built: false, reason: 'not a local repo cli' };
   const dist = path.join(cli.repo, 'dist', 'cli.js');
   if (await fileExists(dist)) return { built: false, reason: 'already built' };
+  const node = await checkCliInstallNode();
+  if (!node.ok) {
+    throw new Error(node.message);
+  }
   await run('npm', ['install'], { cwd: cli.repo });
   await run('npm', ['run', 'build'], { cwd: cli.repo });
   return { built: true, reason: 'built local repo cli' };
