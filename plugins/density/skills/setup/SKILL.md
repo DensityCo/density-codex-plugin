@@ -42,14 +42,15 @@ Fallback scripts live in the plugin root under `scripts/`.
 ## Workflow
 
 1. Run setup or `node scripts/density-setup.mjs --json`.
-2. If setup asks for the managed CLI runtime, use `install_managed_cli`. This is an explicit download/copy action that verifies the manifest checksum before installing into `~/.density-cli/plugin-runtime/`.
-3. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
-4. If Parquet or fast-question inputs are missing, use `onboard_customer` for the starter preload.
-5. If generic Parquet exists but normalized fast-question metadata is missing and repair is available, use `repair_fast_questions`.
-6. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
-7. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
-8. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
-9. Use `historical_export` when the user wants broader customer-owned local history beyond the starter preload.
+2. If setup says a plugin update is available, tell the user: "A newer version of the Density plugin is available. Say `update @density` and I can install it." Run the returned update command only after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
+3. If setup asks for the managed CLI runtime, use `install_managed_cli`. This is an explicit download/copy action that verifies the manifest checksum before installing into `~/.density-cli/plugin-runtime/`.
+4. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
+5. If Parquet or fast-question inputs are missing, use `onboard_customer` for the starter preload.
+6. If generic Parquet exists but normalized fast-question metadata is missing and repair is available, use `repair_fast_questions`.
+7. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
+8. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
+9. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
+10. Use `historical_export` when the user wants broader customer-owned local history beyond the starter preload.
 
 Normal setup should not run `npm install` or build the CLI from source. Use `DENSITY_CLI_REPO` plus `DENSITY_CLI_BUILD_FROM_SOURCE=1` only for explicit development work.
 

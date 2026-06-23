@@ -19,6 +19,16 @@ Please install the Density plugin: run `codex plugin marketplace add https://git
 
 Start a new Codex thread after installing so the Density skill and MCP tools load.
 
+## Update
+
+When setup says a newer Density plugin is available, reply:
+
+```text
+update @density
+```
+
+Codex may render that as `update [@density](plugin://density@densityai)`. It should refresh the `densityai` marketplace, reinstall `density@densityai`, and then ask you to start a new thread so the latest skills and tools load.
+
 ## Try It
 
 Ask Codex:

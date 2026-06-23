@@ -232,7 +232,7 @@ async function handleRawMessage(raw) {
       sendResult(message.id, {
         protocolVersion: message.params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.7' },
+        serverInfo: { name: 'density', version: await pluginVersion() ?? '0.1.8' },
       });
       return;
     }

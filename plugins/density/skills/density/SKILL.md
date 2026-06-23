@@ -43,7 +43,7 @@ Use the sibling skills as expert homes, but keep the product hierarchy clear:
 - Trust layer: `sensor-health`.
 
 If an answer includes a chart, HTML report, table, or floorplan, use `../../assets/design.md` as the only visual contract.
-For broad prompts such as "pick any building" or "compare any one site," prefer the `answer_density_question` front door or a bounded `local_data_profile`/data-health check before asking the user to wait. Do not fall back to shell, DuckDB, SQL, or hand-built Parquet scans for ordinary questions unless the user asks for debugging or the plugin tools are genuinely unavailable.
+For broad prompts such as "pick any building" or "compare any one site," prefer the `answer_density_question` front door or a bounded `local_data_profile`/data-health check before asking the user to wait. If the tool returns `kind: density.clarification_request.v1` with the `density.clarification` contract, ask one crisp clarification using its `suggestions` and `freeform` fields, then resume with `nextActionAfterAnswer`. Do not fall back to shell, DuckDB, SQL, or hand-built Parquet scans for ordinary questions unless the user asks for debugging or the plugin tools are genuinely unavailable.
 
 ## Data Boundary Contract
 
@@ -95,10 +95,10 @@ node scripts/density-setup.mjs --json
 If setup returns `update.available: true`, tell the user:
 
 ```text
-A newer version of the Density plugin is available. Would you like me to install the latest?
+A newer version of the Density plugin is available. Say `update @density` and I can install it.
 ```
 
-Only run the returned update command after the user says yes. After updating, ask the user to start a new thread so the latest Density skill and tools load.
+Only run the returned update command after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
 
 2. If setup says local data is missing, use `onboard_customer` or the fallback script. This is a starter preload for fast first value, not a cap on customer-owned local history. The default path is staged: it may sync cheap metadata, then returns one primary next action for longer starter metrics/export work instead of hiding a long all-spaces sync.
 
