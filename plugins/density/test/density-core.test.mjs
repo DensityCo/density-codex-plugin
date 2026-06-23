@@ -111,12 +111,20 @@ test('all Density skills carry the shared interaction contract', async () => {
   }
 });
 
-test('plugin manifest version reflects the progress-update interaction patch', async () => {
+test('plugin manifest version reflects the managed CLI 0.1.1 runtime release', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.8');
+  assert.equal(manifest.version, '0.1.9');
   assert.equal(manifest.managedCli.enabled, true);
+  assert.equal(manifest.managedCli.version, '0.1.1');
   assert.ok(manifest.managedCli.assets['darwin-arm64'].url);
-  assert.match(manifest.managedCli.assets['darwin-arm64'].sha256, /^[a-f0-9]{64}$/);
+  assert.equal(
+    manifest.managedCli.assets['darwin-arm64'].url,
+    'https://github.com/DensityCo/density-codex-plugin/releases/download/density-cli-runtime-v0.1.1/density-cli-v0.1.1-darwin-arm64.tar.gz'
+  );
+  assert.equal(
+    manifest.managedCli.assets['darwin-arm64'].sha256,
+    '59d165f811975a07b50419e2093df2666b35f36aa68913fc328c0786458ada7a'
+  );
 });
 
 test('plugin update check exposes update-at-density prompt and reinstall command', async () => {
@@ -127,7 +135,7 @@ test('plugin update check exposes update-at-density prompt and reinstall command
 
     assert.equal(update.checked, true);
     assert.equal(update.available, true);
-    assert.equal(update.current, '0.1.8');
+    assert.equal(update.current, '0.1.9');
     assert.equal(update.latest, '99.0.0');
     assert.equal(update.userPrompt, 'update @density');
     assert.equal(update.displayPrompt, 'update [@density](plugin://density@densityai)');
