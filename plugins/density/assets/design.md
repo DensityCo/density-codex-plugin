@@ -36,7 +36,8 @@ Use this file as the single visual contract for Density plugin artifacts. If a u
 - Legends, badges, subtitles, and labels must never overlap the title, marks, axes, or each other. Prefer direct labels or a below-chart legend when the title is long.
 - Sort ranked charts by the metric being discussed.
 - Show units in labels or subtitles, such as hours per day, person-hours, percent of working hours, or spaces.
-- Avoid naked stats in titles, labels, and callouts. Prefer patterns like "5.8% of the working day (8am-6pm local time), +1.9 pts vs building baseline" or "3.1 hours per room per day, 0.7 above portfolio average."
+- Analyze only available measured spaces for normal utilization charts. Planning, inactive, retired, decommissioned, and unavailable spaces are eligibility inputs, not commentary, unless the chart is explicitly about data health, setup, lifecycle coverage, or missing inventory.
+- Avoid naked stats in titles, labels, and callouts. Match the denominator to the question: for one room over time, use language like "busy for 12% of working hours"; for hour-of-day charts across rooms, use "at 2pm, 13% of available measured rooms were occupied" instead of room-hour language.
 - Use the accent color only for the lead series or important highlight.
 - Keep comparison series muted.
 - Include the time window, business-hours assumption with definition, timezone basis, and data freshness when relevant.
