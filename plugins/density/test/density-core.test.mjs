@@ -30,7 +30,7 @@ import {
   setup,
   DEFAULT_METRICS_DAYS,
 } from '../scripts/density-core.mjs';
-import { managedCliPlatform, resolveDensityCli, storageReport, which } from '../scripts/density-lib.mjs';
+import { checkPluginUpdate, managedCliPlatform, resolveDensityCli, storageReport, which } from '../scripts/density-lib.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -113,10 +113,31 @@ test('all Density skills carry the shared interaction contract', async () => {
 
 test('plugin manifest version reflects the progress-update interaction patch', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.7');
+  assert.equal(manifest.version, '0.1.8');
   assert.equal(manifest.managedCli.enabled, true);
   assert.ok(manifest.managedCli.assets['darwin-arm64'].url);
   assert.match(manifest.managedCli.assets['darwin-arm64'].sha256, /^[a-f0-9]{64}$/);
+});
+
+test('plugin update check exposes update-at-density prompt and reinstall command', async () => {
+  await withTempEnv(async () => {
+    process.env.DENSITY_PLUGIN_LATEST_MANIFEST_URL = 'data:application/json,{"version":"99.0.0"}';
+
+    const update = await checkPluginUpdate();
+
+    assert.equal(update.checked, true);
+    assert.equal(update.available, true);
+    assert.equal(update.current, '0.1.8');
+    assert.equal(update.latest, '99.0.0');
+    assert.equal(update.userPrompt, 'update @density');
+    assert.equal(update.displayPrompt, 'update [@density](plugin://density@densityai)');
+    assert.equal(update.pluginSelector, 'density@densityai');
+    assert.equal(update.pluginUri, 'plugin://density@densityai');
+    assert.match(update.prompt, /update @density/);
+    assert.match(update.command, /codex plugin marketplace upgrade densityai/);
+    assert.match(update.command, /codex plugin remove density@densityai/);
+    assert.match(update.command, /codex plugin add density@densityai/);
+  });
 });
 
 test('MCP tools/list exposes the default Density front door and routing guidance', async () => {
@@ -1663,6 +1684,30 @@ test('setup asks to update managed CLI when required capabilities are absent', a
     assert.equal(result.nextAction.id, 'install_managed_cli');
     assert.deepEqual(result.nextAction.missingRequiredCapabilities, ['commands.questionStarter', 'questionAnswering.localFirst']);
     assert.deepEqual(result.managedCli.missingRequiredCapabilities, ['commands.questionStarter', 'questionAnswering.localFirst']);
+    assert.equal(result.userVisiblePrimaryActions, 1);
+  });
+});
+
+test('setup exposes update-at-density as the plugin update action', async () => {
+  await withTempEnv(async (tempDir) => {
+    process.env.DENSITY_PLUGIN_LATEST_MANIFEST_URL = 'data:application/json,{"version":"99.0.0"}';
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const dataDir = path.join(tempDir, 'ready');
+    await writeFakeCli(fakeCli);
+    await writeParquetTables(dataDir);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_AUTH_OK = '1';
+    process.env.FAKE_CHART_SUPPORT = '1';
+    process.env.FAKE_STARTER_SUPPORT = '1';
+
+    const result = await setup({ dataDir });
+
+    assert.equal(result.nextAction.id, 'plugin_update');
+    assert.equal(result.nextAction.userPrompt, 'update @density');
+    assert.equal(result.nextAction.displayPrompt, 'update [@density](plugin://density@densityai)');
+    assert.equal(result.nextAction.pluginSelector, 'density@densityai');
+    assert.equal(result.nextAction.pluginUri, 'plugin://density@densityai');
+    assert.match(result.nextAction.command, /codex plugin remove density@densityai/);
     assert.equal(result.userVisiblePrimaryActions, 1);
   });
 });

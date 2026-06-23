@@ -594,6 +594,10 @@ export async function setup(args = {}) {
       id: 'plugin_update',
       label: update.prompt,
       command: update.command,
+      userPrompt: update.userPrompt,
+      displayPrompt: update.displayPrompt,
+      pluginSelector: update.pluginSelector,
+      pluginUri: update.pluginUri,
     },
   ]);
 

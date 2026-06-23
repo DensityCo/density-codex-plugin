@@ -95,10 +95,10 @@ node scripts/density-setup.mjs --json
 If setup returns `update.available: true`, tell the user:
 
 ```text
-A newer version of the Density plugin is available. Would you like me to install the latest?
+A newer version of the Density plugin is available. Say `update @density` and I can install it.
 ```
 
-Only run the returned update command after the user says yes. After updating, ask the user to start a new thread so the latest Density skill and tools load.
+Only run the returned update command after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
 
 2. If setup says local data is missing, use `onboard_customer` or the fallback script. This is a starter preload for fast first value, not a cap on customer-owned local history. The default path is staged: it may sync cheap metadata, then returns one primary next action for longer starter metrics/export work instead of hiding a long all-spaces sync.
 

@@ -806,8 +806,12 @@ export const checkPluginUpdate = async () => {
       available,
       current,
       latest,
-      command: 'codex plugin marketplace upgrade densityai && codex plugin add density@densityai',
-      prompt: available ? 'A newer version of the Density plugin is available. Would you like to install the latest?' : undefined,
+      command: 'codex plugin marketplace upgrade densityai && codex plugin remove density@densityai && codex plugin add density@densityai',
+      userPrompt: 'update @density',
+      displayPrompt: 'update [@density](plugin://density@densityai)',
+      pluginSelector: 'density@densityai',
+      pluginUri: 'plugin://density@densityai',
+      prompt: available ? 'A newer version of the Density plugin is available. Say `update @density` and I can install it.' : undefined,
     };
   } catch (error) {
     return { checked: false, available: false, current, reason: `Could not check for updates: ${error.message}` };
