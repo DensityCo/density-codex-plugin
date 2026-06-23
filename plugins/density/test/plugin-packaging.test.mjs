@@ -115,6 +115,8 @@ test('Density skills preserve building lifecycle and go-live analysis rules', as
 
   assert.match(density, /available_buildings/, 'parent skill should name the lifecycle readiness tool');
   assert.match(density, /status\/go-live readiness/, 'parent skill should require status/go-live awareness');
+  assert.match(density, /density\.clarification_request\.v1/, 'parent skill should preserve the formal clarification request kind');
+  assert.match(density, /density\.clarification/, 'parent skill should preserve the formal clarification contract');
   assert.match(utilization, /chartQueryable/, 'utilization skill should use chart queryability before artifacts');
   assert.match(utilization, /planning, retired, inactive, future go-live, or unknown go-live/, 'utilization skill should disclose non-live or uncertain lifecycle states');
   assert.match(wayfinding, /liveWayfindingEligible/, 'wayfinding skill should require live wayfinding eligibility');

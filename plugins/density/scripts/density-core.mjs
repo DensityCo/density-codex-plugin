@@ -295,6 +295,37 @@ const rememberChartContext = (dataDir, result) => {
 
 const readChartContext = (dataDir) => chartContextCache.get(chartContextKey(dataDir));
 
+const broadScopeClarificationContract = () => ({
+  kind: 'density.clarification_request.v1',
+  contract: 'density.clarification',
+  reason: 'broad_scope_needs_resolution',
+  requiredChoiceCount: 1,
+  suggestions: [
+    {
+      id: 'list_measured_buildings',
+      label: 'Show the measured buildings I can choose from.',
+    },
+    {
+      id: 'choose_measured_building',
+      label: 'Use a specific measured building.',
+    },
+  ],
+  freeform: {
+    enabled: true,
+    label: 'Name a measured building, floor, space type, or time window.',
+  },
+  nextActionAfterAnswer: {
+    id: 'answer_density_question',
+    label: 'Answer the question with the selected measured scope.',
+  },
+  responseSemantics: {
+    answer: false,
+    chart: false,
+    benchmark: false,
+    writesArtifacts: false,
+  },
+});
+
 const parseJsonOutput = (stdout, label) => {
   try {
     return JSON.parse(stdout);
@@ -336,9 +367,11 @@ const parseQuestionUiAnswer = async ({ question, dataDir, cli, result, tool }) =
     cli: safeCliInfo(cli),
   };
   if (broadScopeSelectionIntent(question) && noMatchingLocalScope(response)) {
+    const clarification = broadScopeClarificationContract();
     return {
       ...response,
       ok: false,
+      ...clarification,
       intent: 'broad_scope_needs_resolution',
       title: 'I need a measured building scope',
       subtitle: 'The local question layer could not safely choose a building from that broad prompt, so this should not turn into manual DuckDB or Parquet work.',

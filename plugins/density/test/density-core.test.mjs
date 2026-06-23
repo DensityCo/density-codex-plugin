@@ -1033,11 +1033,31 @@ test('answer density question turns broad scope misses into a fast clarification
     const calls = await readFakeLog(logFile);
 
     assert.equal(result.ok, false);
+    assert.equal(result.kind, 'density.clarification_request.v1');
+    assert.equal(result.contract, 'density.clarification');
+    assert.equal(result.reason, 'broad_scope_needs_resolution');
     assert.equal(result.intent, 'broad_scope_needs_resolution');
     assert.equal(result.chartSuppressed, true);
     assert.equal(result.nextAction.id, 'clarify_measured_building_scope');
+    assert.deepEqual(result.suggestions.map((suggestion) => suggestion.id), [
+      'list_measured_buildings',
+      'choose_measured_building',
+    ]);
+    assert.equal(result.requiredChoiceCount, 1);
+    assert.equal(result.freeform.enabled, true);
+    assert.equal(result.nextActionAfterAnswer.id, 'answer_density_question');
+    assert.deepEqual(result.responseSemantics, {
+      answer: false,
+      chart: false,
+      benchmark: false,
+      writesArtifacts: false,
+    });
     assert.match(result.subtitle, /manual DuckDB or Parquet work/i);
     assert.deepEqual(result.recovery.avoid, ['shell', 'DuckDB', 'SQL', 'manual Parquet scans', 'hand-built chart scripts']);
+    assert.equal(result.chart, undefined);
+    assert.equal(result.html, undefined);
+    assert.equal(result.png, undefined);
+    assert.equal(result.benchmark, undefined);
     assert.equal(calls.filter((args) => args[0] === 'question').length, 1);
     assert.equal(calls.some((args) => args[0] === 'status'), false);
     assert.equal(calls.some((args) => args[0] === 'sync'), false);
