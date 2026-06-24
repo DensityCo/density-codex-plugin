@@ -111,19 +111,19 @@ test('all Density skills carry the shared interaction contract', async () => {
   }
 });
 
-test('plugin manifest version reflects the managed CLI 0.1.1 RC runtime release', async () => {
+test('plugin manifest version reflects the managed CLI 0.1.2 RC runtime release', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
   assert.equal(manifest.version, '0.1.9');
   assert.equal(manifest.managedCli.enabled, true);
-  assert.equal(manifest.managedCli.version, '0.1.1-rc.1');
+  assert.equal(manifest.managedCli.version, '0.1.2-rc.1');
   assert.ok(manifest.managedCli.assets['darwin-arm64'].url);
   assert.equal(
     manifest.managedCli.assets['darwin-arm64'].url,
-    'https://github.com/DensityCo/density-codex-plugin/releases/download/density-cli-runtime-v0.1.1-rc.1/density-cli-v0.1.1-rc.1-darwin-arm64.tar.gz'
+    'https://github.com/DensityCo/density-codex-plugin/releases/download/density-cli-runtime-v0.1.2-rc.1/density-cli-v0.1.2-rc.1-darwin-arm64.tar.gz'
   );
   assert.equal(
     manifest.managedCli.assets['darwin-arm64'].sha256,
-    '67362097d1fdeb11ae1368677e22ad70250d5c1e5f99c8b8f0f0fc9e72d03fee'
+    'aec4e782f28eff8a8b4e513ea20ce83595355ecb9f468642199d634ca6a378d0'
   );
 });
 
