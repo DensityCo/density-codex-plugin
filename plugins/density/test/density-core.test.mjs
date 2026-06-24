@@ -111,9 +111,9 @@ test('all Density skills carry the shared interaction contract', async () => {
   }
 });
 
-test('plugin manifest version reflects the progress-update interaction patch', async () => {
+test('plugin manifest version reflects the managed runtime 0.1.2 release', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.8');
+  assert.equal(manifest.version, '0.1.9');
   assert.equal(manifest.managedCli.enabled, true);
   assert.ok(manifest.managedCli.assets['darwin-arm64'].url);
   assert.match(manifest.managedCli.assets['darwin-arm64'].sha256, /^[a-f0-9]{64}$/);
@@ -127,7 +127,7 @@ test('plugin update check exposes update-at-density prompt and reinstall command
 
     assert.equal(update.checked, true);
     assert.equal(update.available, true);
-    assert.equal(update.current, '0.1.8');
+    assert.equal(update.current, '0.1.9');
     assert.equal(update.latest, '99.0.0');
     assert.equal(update.userPrompt, 'update @density');
     assert.equal(update.displayPrompt, 'update [@density](plugin://density@densityai)');
