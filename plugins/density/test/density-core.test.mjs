@@ -123,7 +123,7 @@ test('plugin manifest version reflects the managed CLI 0.1.1 RC runtime release'
   );
   assert.equal(
     manifest.managedCli.assets['darwin-arm64'].sha256,
-    '8b03aca8027a061be43cde3089b8420350117118c10aff1f26c3f118683559a2'
+    '67362097d1fdeb11ae1368677e22ad70250d5c1e5f99c8b8f0f0fc9e72d03fee'
   );
 });
 

@@ -31,7 +31,7 @@
     "assets": {
       "darwin-arm64": {
         "url": "https://github.com/DensityCo/density-codex-plugin/releases/download/density-cli-runtime-v0.1.1-rc.1/density-cli-v0.1.1-rc.1-darwin-arm64.tar.gz",
-        "sha256": "8b03aca8027a061be43cde3089b8420350117118c10aff1f26c3f118683559a2"
+        "sha256": "67362097d1fdeb11ae1368677e22ad70250d5c1e5f99c8b8f0f0fc9e72d03fee"
       }
     }
   },
