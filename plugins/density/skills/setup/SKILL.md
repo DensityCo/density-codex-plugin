@@ -30,6 +30,7 @@ Prefer the plugin MCP tools when available:
 - `install_managed_cli`
 - `auth_login`
 - `onboard_customer`
+- `onboarding_status`
 - `historical_export`
 - `create_demo_customer`
 - `storage_report`
@@ -45,12 +46,12 @@ Fallback scripts live in the plugin root under `scripts/`.
 2. If setup says a plugin update is available, tell the user: "A newer version of the Density plugin is available. Say `update @density` and I can install it." Run the returned update command only after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
 3. If setup asks for the managed CLI runtime, use `install_managed_cli`. This is an explicit download/copy action that verifies the manifest checksum before installing into `~/.density-cli/plugin-runtime/`.
 4. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
-5. If Parquet or fast-question inputs are missing, use `onboard_customer` for the starter preload.
+5. If Parquet or fast-question inputs are missing, present the onboarding choices from setup/onboard_customer. Recommend fetching 30 days for all locations now and continuing the remaining supported history in the background.
 6. If generic Parquet exists but normalized fast-question metadata is missing and repair is available, use `repair_fast_questions`.
 7. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
 8. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
 9. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
-10. Use `historical_export` when the user wants broader customer-owned local history beyond the starter preload.
+10. Use `onboarding_status` to check a background deeper-history job and tell the user when the full supported local history is ready. Use `historical_export` when the user explicitly asks for a separate broader customer-owned local history export.
 
 Normal setup should not run `npm install` or build the CLI from source. Use `DENSITY_CLI_REPO` plus `DENSITY_CLI_BUILD_FROM_SOURCE=1` only for explicit development work.
 
@@ -68,10 +69,14 @@ Good local analytics stores include canonical Parquet tables plus normalized fas
 
 Treat `parquetReady` as necessary but not sufficient for utilization. For fast historical questions, also check `fastQuestionsReady` and starter-cache usefulness when available.
 
-## Sync Defaults
+## Onboarding Choices
 
-The default starter metrics preload is 14 days. Windows up to 7 days may use 15-minute metrics; longer windows may use hourly metrics to keep two-week answers practical.
+When setup reaches local data preparation, present these choices:
 
-Prefer staged setup unless the user explicitly wants a longer full sync.
+- Recommended: fetch 30 days for all locations now, then run the remaining supported history in the background.
+- Recent only: fetch 30 days for all locations and skip the background history job.
+- Specific location: fetch a named building, floor, or location slice once the CLI exposes a scoped onboarding resolver.
 
-For larger local history, use `historical_export`. Do not describe the starter preload limit as a limit on customer access to their own data.
+Windows up to 7 days may use 15-minute metrics; longer windows use hourly metrics to keep setup practical. Background deeper-history sync uses the CLI historical export path, which splits Data Access API observation requests at UTC calendar-month boundaries.
+
+Do not describe the recent preload as a limit on customer access to their own data. Until the background job completes, answers should disclose that local history is recent-first and still filling in deeper history.

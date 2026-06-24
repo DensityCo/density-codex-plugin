@@ -33,6 +33,7 @@ Prefer the plugin MCP tools when available:
 - `starter_questions`
 - `repair_fast_questions`
 - `onboard_customer`
+- `onboarding_status`
 - `historical_export`
 
 ## Diagnosis Checklist
@@ -53,4 +54,4 @@ Check these before answering an analytical question from local data:
 
 When data is not good enough, say exactly what is missing and what evidence showed that. Then give one primary next action: repair metadata, sync metrics, export Parquet, warm starter questions, or narrow the question.
 
-If the issue is that the requested window is broader than the starter preload, recommend `historical_export` rather than implying the local-first product is capped at the preload window.
+If the issue is that the requested window is broader than the recent preload, check `onboarding_status` first. If a background deeper-history job is still running, say the local dataset is recent-first and still filling in deeper history. If no job exists, recommend the deeper-history onboarding/export path rather than implying the local-first product is capped at the preload window.
