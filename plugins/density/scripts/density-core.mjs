@@ -1,5 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import {
   checkPluginUpdate,
   defaultDataDir,
@@ -18,14 +20,17 @@ import {
   which,
 } from './density-lib.mjs';
 
-export const DEFAULT_METRICS_DAYS = 14;
-export const MAX_METRICS_DAYS = 14;
+export const DEFAULT_METRICS_DAYS = 30;
+export const MAX_METRICS_DAYS = 30;
 export const MAX_15M_METRICS_DAYS = 7;
 export const DEFAULT_HISTORICAL_EXPORT_DAYS = 90;
 export const MAX_HISTORICAL_EXPORT_DAYS = 365;
+export const DEFAULT_BACKGROUND_DEEP_SYNC_DAYS = MAX_HISTORICAL_EXPORT_DAYS;
 
 export const resolveDataDir = (value) => value || process.env.DENSITY_CLI_DATA_DIR || defaultDataDir();
 const availableBuildingsSupported = (capabilities) => Boolean(capabilities.commands?.availableBuildings || capabilities.availableBuildings);
+const onboardingStateDir = (dataDir) => path.join(dataDir, 'onboarding');
+const deepSyncStatusFile = (dataDir) => path.join(onboardingStateDir(dataDir), 'deep-history-sync.json');
 
 const SOURCE_LAYERS = {
   localCustomerData: 'local_customer_data',
@@ -43,6 +48,68 @@ const chartContextCache = new Map();
 
 const oneLine = (value) => String(value ?? '').trim();
 const sourceBadgeFor = (sourceLayer) => SOURCE_BADGES[sourceLayer] ?? 'Mixed';
+const nowIso = () => new Date().toISOString();
+
+const readJsonFile = async (file) => {
+  try {
+    return JSON.parse(await readFile(file, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined;
+    throw error;
+  }
+};
+
+const writeJsonFile = async (file, value) => {
+  await mkdir(path.dirname(file), { recursive: true });
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempFile, `${JSON.stringify(value, null, 2)}\n`);
+  await rename(tempFile, file);
+};
+
+const latestDeepSyncStatus = async (dataDir) => {
+  const statusFile = deepSyncStatusFile(dataDir);
+  const status = await readJsonFile(statusFile);
+  return status ? { ...status, statusFile } : undefined;
+};
+
+const startBackgroundDeepSync = async ({ dataDir, orgId, days, recentDays }) => {
+  const statusFile = deepSyncStatusFile(dataDir);
+  const startedAt = nowIso();
+  const job = {
+    kind: 'density.onboarding.deep-history-sync',
+    jobId: `deep-history-${Date.now()}`,
+    status: 'running',
+    mode: 'historical-export',
+    scope: { type: 'all_locations' },
+    days,
+    recentDays,
+    dataDir,
+    statusFile,
+    startedAt,
+    updatedAt: startedAt,
+    note: 'Background sync uses the Density CLI historical export path, which splits Data Access API observation requests at UTC calendar-month boundaries.',
+  };
+  await writeJsonFile(statusFile, job);
+
+  const script = new URL('./density-background-deep-sync.mjs', import.meta.url).pathname;
+  const child = spawn(process.execPath, [
+    script,
+    '--data-dir', dataDir,
+    '--days', String(days),
+    '--recent-days', String(recentDays),
+    '--status-file', statusFile,
+    ...(orgId ? ['--org', orgId] : []),
+  ], {
+    detached: true,
+    stdio: 'ignore',
+    env: process.env,
+  });
+  child.unref();
+
+  const withPid = { ...job, pid: child.pid };
+  await writeJsonFile(statusFile, withPid);
+  return withPid;
+};
 
 const chartContextKey = (dataDir) => path.resolve(dataDir);
 
@@ -608,9 +675,15 @@ export async function setup(args = {}) {
     },
     cli && status?.code === 0 && (!storage.parquetReady || (capabilities.commands?.questionStarter && !storage.fastQuestionsReady)) && {
       id: 'onboard_customer',
-      label: 'Prepare local Density data.',
+      label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
       tool: 'onboard_customer',
-      args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true },
+      args: {
+        dataDir,
+        days: DEFAULT_METRICS_DAYS,
+        fullSync: true,
+        backgroundDeepSync: true,
+        backgroundDeepSyncDays: DEFAULT_BACKGROUND_DEEP_SYNC_DAYS,
+      },
       command: `density sync --stream spaces && density sync --stream metrics --all-spaces --since ${DEFAULT_METRICS_DAYS}d --until now --interval ${metricsIntervalForDays(DEFAULT_METRICS_DAYS)} && density export parquet --out ${path.join(dataDir, 'parquet')} --all-orgs`,
     },
     cli && status?.code === 0 && !availableBuildingsSupported(capabilities) && {
@@ -788,11 +861,11 @@ export async function repairFastQuestions(args = {}) {
       storage: await storageReport(dataDir),
       nextAction: {
         id: 'onboard_customer',
-        label: 'Prepare local Density data.',
+        label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
         tool: 'onboard_customer',
-        args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true },
+        args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: true },
       },
-      nextSteps: ['Prepare local Density data.'],
+      nextSteps: [`Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`],
       userVisiblePrimaryActions: 1,
     };
   }
@@ -818,11 +891,11 @@ export async function repairFastQuestions(args = {}) {
     storage,
     nextAction: storage.fastQuestionsReady ? undefined : {
       id: 'onboard_customer',
-      label: 'Prepare local Density data.',
+      label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
       tool: 'onboard_customer',
-      args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true },
+      args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: true },
     },
-    nextSteps: storage.fastQuestionsReady ? [] : ['Prepare local Density data.'],
+    nextSteps: storage.fastQuestionsReady ? [] : [`Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`],
     userVisiblePrimaryActions: storage.fastQuestionsReady ? 0 : 1,
   };
 }
@@ -845,6 +918,10 @@ export async function onboardCustomer(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
   const days = boundedMetricsDays(args.days);
   const fullSync = Boolean(args.fullSync);
+  const backgroundDeepSync = Boolean(args.backgroundDeepSync ?? (fullSync && days === DEFAULT_METRICS_DAYS));
+  const backgroundDeepSyncDays = backgroundDeepSync
+    ? boundedHistoricalExportDays(args.backgroundDeepSyncDays ?? DEFAULT_BACKGROUND_DEEP_SYNC_DAYS)
+    : undefined;
   const prewarmQuestions = args.prewarmQuestions !== false;
   const timeoutSeconds = Number.isFinite(Number(args.timeoutSeconds)) ? Number(args.timeoutSeconds) : 110;
   const steps = [];
@@ -908,12 +985,47 @@ export async function onboardCustomer(args = {}) {
         storage,
         nextAction: {
           id: 'run_full_sync',
-          label: 'Run explicit full sync when ready.',
+          label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
           tool: 'onboard_customer',
-          args: { dataDir, orgId: args.orgId, days, fullSync: true },
+          args: {
+            dataDir,
+            orgId: args.orgId,
+            days: DEFAULT_METRICS_DAYS,
+            fullSync: true,
+            backgroundDeepSync: true,
+            backgroundDeepSyncDays: DEFAULT_BACKGROUND_DEEP_SYNC_DAYS,
+          },
           command: `density ${metricsCommand.join(' ')}`,
         },
-        nextSteps: ['Run explicit full sync when ready.'],
+        onboardingOptions: [
+          {
+            id: 'recommended_recent_plus_background',
+            recommended: true,
+            label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations now, then background the remaining supported history.`,
+            tool: 'onboard_customer',
+            args: {
+              dataDir,
+              orgId: args.orgId,
+              days: DEFAULT_METRICS_DAYS,
+              fullSync: true,
+              backgroundDeepSync: true,
+              backgroundDeepSyncDays: DEFAULT_BACKGROUND_DEEP_SYNC_DAYS,
+            },
+          },
+          {
+            id: 'recent_only',
+            label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations and skip the background history job.`,
+            tool: 'onboard_customer',
+            args: { dataDir, orgId: args.orgId, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: false },
+          },
+          {
+            id: 'specific_location',
+            label: 'Fetch a specific building, floor, or location slice.',
+            unavailable: true,
+            reason: 'Scoped onboarding needs a CLI scope resolver so the plugin can sync descendants without guessing space ids.',
+          },
+        ],
+        nextSteps: [`Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`],
         userVisiblePrimaryActions: 1,
       };
     }
@@ -962,11 +1074,29 @@ export async function onboardCustomer(args = {}) {
         };
       }
     }
+    const backgroundJob = backgroundDeepSync && storage.parquetReady && storage.fastQuestionsReady
+      ? await startBackgroundDeepSync({
+        dataDir,
+        orgId: args.orgId,
+        days: backgroundDeepSyncDays,
+        recentDays: days,
+      })
+      : undefined;
+
     return {
       ok: storage.parquetReady && (!prewarmQuestions || storage.fastQuestionsReady),
-      mode: 'full-sync',
+      mode: backgroundJob ? 'recent-plus-background' : 'full-sync',
       dataDir,
       days,
+      backgroundDeepSync: backgroundJob
+        ? {
+          enabled: true,
+          days: backgroundDeepSyncDays,
+          recentDays: days,
+          status: backgroundJob,
+          pollingTool: 'onboarding_status',
+        }
+        : { enabled: false },
       cli: safeCliInfo(cli),
       steps,
       storage,
@@ -1003,6 +1133,7 @@ export async function historicalExport(args = {}) {
   const cli = await requireCli();
   const dataDir = resolveDataDir(args.dataDir);
   const days = boundedHistoricalExportDays(args.days);
+  const until = args.until === undefined ? 'now' : String(args.until);
   const interval = historicalIntervalForDays(days);
   const timeoutSeconds = Number.isFinite(Number(args.timeoutSeconds)) ? Number(args.timeoutSeconds) : 600;
   const timeoutMs = Math.max(1, timeoutSeconds) * 1000;
@@ -1030,8 +1161,8 @@ export async function historicalExport(args = {}) {
     return step;
   };
 
-  const metricsCommand = ['sync', '--stream', 'metrics', '--all-spaces', '--since', `${days}d`, '--until', 'now', '--interval', interval];
-  const occupancyCommand = ['sync', '--stream', 'occupancy', '--all-spaces', '--since', `${days}d`, '--until', 'now', '--interval', '1h'];
+  const metricsCommand = ['sync', '--stream', 'metrics', '--all-spaces', '--since', `${days}d`, '--until', until, '--interval', interval];
+  const occupancyCommand = ['sync', '--stream', 'occupancy', '--all-spaces', '--since', `${days}d`, '--until', until, '--interval', '1h'];
   const exportCommand = ['export', 'parquet', '--out', path.join(dataDir, 'parquet'), '--all-orgs'];
 
   try {
@@ -1048,6 +1179,7 @@ export async function historicalExport(args = {}) {
       sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
       dataDir,
       days,
+      until,
       interval,
       cli: safeCliInfo(cli),
       steps,
@@ -1063,6 +1195,7 @@ export async function historicalExport(args = {}) {
       sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
       dataDir,
       days,
+      until,
       interval,
       cli: safeCliInfo(cli),
       steps: error.steps ?? steps,
@@ -1076,6 +1209,31 @@ export async function historicalExport(args = {}) {
       userVisiblePrimaryActions: 1,
     };
   }
+}
+
+export async function onboardingStatus(args = {}) {
+  const dataDir = resolveDataDir(args.dataDir);
+  const backgroundDeepSync = await latestDeepSyncStatus(dataDir);
+  return {
+    ok: true,
+    kind: 'density.onboarding-status',
+    sourceLayer: SOURCE_LAYERS.localCustomerData,
+    sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
+    dataDir,
+    backgroundDeepSync: backgroundDeepSync ?? {
+      status: 'not_started',
+      statusFile: deepSyncStatusFile(dataDir),
+    },
+    nextAction: backgroundDeepSync?.status === 'running'
+      ? {
+        id: 'check_background_deep_sync',
+        label: 'Check the Density background history sync again later.',
+        tool: 'onboarding_status',
+        args: { dataDir },
+      }
+      : undefined,
+    userVisiblePrimaryActions: backgroundDeepSync?.status === 'running' ? 1 : 0,
+  };
 }
 
 export async function askChart(args = {}) {
@@ -1453,9 +1611,9 @@ export async function localDataProfile(args = {}) {
       ? undefined
       : {
           id: 'onboard_customer',
-          label: 'Prepare local Density data.',
+          label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
           tool: 'onboard_customer',
-          args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true },
+          args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: true },
         },
     userVisiblePrimaryActions: storage.parquetReady && storage.fastQuestionsReady ? 0 : 1,
   };

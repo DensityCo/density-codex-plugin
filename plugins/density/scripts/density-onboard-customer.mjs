@@ -6,6 +6,7 @@ const json = args.includes('--json');
 const dataDirFlag = args.find((arg) => arg.startsWith('--data-dir='));
 const orgFlag = args.find((arg) => arg.startsWith('--org='));
 const daysFlag = args.find((arg) => arg.startsWith('--days='));
+const backgroundDaysFlag = args.find((arg) => arg.startsWith('--background-days='));
 const timeoutFlag = args.find((arg) => arg.startsWith('--timeout-seconds='));
 
 const payload = await onboardCustomer({
@@ -13,6 +14,8 @@ const payload = await onboardCustomer({
   orgId: orgFlag?.slice('--org='.length),
   days: daysFlag ? Number(daysFlag.slice('--days='.length)) : undefined,
   fullSync: args.includes('--full-sync'),
+  backgroundDeepSync: args.includes('--no-background-deep-sync') ? false : undefined,
+  backgroundDeepSyncDays: backgroundDaysFlag ? Number(backgroundDaysFlag.slice('--background-days='.length)) : undefined,
   timeoutSeconds: timeoutFlag ? Number(timeoutFlag.slice('--timeout-seconds='.length)) : undefined,
 });
 

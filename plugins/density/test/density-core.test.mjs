@@ -24,10 +24,12 @@ import {
   localUtilizationQuery,
   metricsIntervalForDays,
   onboardCustomer,
+  onboardingStatus,
   repairFastQuestions,
   sensorHealthReport,
   starterQuestions,
   setup,
+  DEFAULT_BACKGROUND_DEEP_SYNC_DAYS,
   DEFAULT_METRICS_DAYS,
 } from '../scripts/density-core.mjs';
 import { checkPluginUpdate, managedCliPlatform, resolveDensityCli, storageReport, which } from '../scripts/density-lib.mjs';
@@ -482,6 +484,16 @@ const readFakeLog = async (file) => {
   } catch {
     return [];
   }
+};
+
+const waitFor = async (predicate, { timeoutMs = 3000, intervalMs = 50 } = {}) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = await predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return undefined;
 };
 
 const sha256File = async (file) => createHash('sha256')
@@ -1347,8 +1359,15 @@ test('default onboarding is staged and does not start sync commands', async () =
     assert.equal(result.mode, 'staged');
     assert.equal(result.days, DEFAULT_METRICS_DAYS);
     assert.equal(result.nextAction.id, 'run_full_sync');
-    assert.match(result.nextAction.command, /--since 14d/);
+    assert.equal(result.nextAction.args.days, 30);
+    assert.equal(result.nextAction.args.backgroundDeepSync, true);
+    assert.equal(result.nextAction.args.backgroundDeepSyncDays, DEFAULT_BACKGROUND_DEEP_SYNC_DAYS);
+    assert.match(result.nextAction.command, /--since 30d/);
     assert.match(result.nextAction.command, /--interval 1h/);
+    assert.equal(result.onboardingOptions[0].id, 'recommended_recent_plus_background');
+    assert.equal(result.onboardingOptions[0].recommended, true);
+    assert.equal(result.onboardingOptions[1].id, 'recent_only');
+    assert.equal(result.onboardingOptions[2].id, 'specific_location');
     assert.equal(calls.some((args) => args[0] === 'sync'), false);
     assert.equal(calls.some((args) => args[0] === 'sync' && args.includes('metrics')), false);
   });
@@ -1401,6 +1420,70 @@ test('full onboarding uses hourly metrics for two-week windows', async () => {
   });
 });
 
+test('recommended full onboarding syncs 30 days and starts background deeper history', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const logFile = path.join(tempDir, 'calls.log');
+    const dataDir = path.join(tempDir, 'data');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CLI_LOG = logFile;
+
+    const result = await onboardCustomer({
+      dataDir,
+      fullSync: true,
+      backgroundDeepSyncDays: 60,
+    });
+    const foregroundCalls = await readFakeLog(logFile);
+    const metricsCall = foregroundCalls.find((args) => args[0] === 'sync' && args.includes('metrics'));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.mode, 'recent-plus-background');
+    assert.equal(result.days, DEFAULT_METRICS_DAYS);
+    assert.equal(result.backgroundDeepSync.enabled, true);
+    assert.equal(result.backgroundDeepSync.days, 60);
+    assert.equal(result.backgroundDeepSync.recentDays, DEFAULT_METRICS_DAYS);
+    assert.equal(result.backgroundDeepSync.pollingTool, 'onboarding_status');
+    assert.equal(metricsCall[metricsCall.indexOf('--since') + 1], '30d');
+
+    const completed = await waitFor(async () => {
+      const status = await onboardingStatus({ dataDir });
+      return status.backgroundDeepSync.status === 'complete' ? status : undefined;
+    });
+    assert.ok(completed);
+    assert.equal(completed.backgroundDeepSync.result.days, 60);
+    assert.equal(completed.backgroundDeepSync.result.until, '30d');
+
+    const calls = await readFakeLog(logFile);
+    assert.ok(calls.some((args) => args[0] === 'sync' && args.includes('metrics') && args[args.indexOf('--since') + 1] === '60d' && args[args.indexOf('--until') + 1] === '30d'));
+    assert.ok(calls.some((args) => args[0] === 'sync' && args.includes('occupancy') && args[args.indexOf('--since') + 1] === '60d' && args[args.indexOf('--until') + 1] === '30d'));
+  });
+});
+
+test('recent-only onboarding skips the background deeper-history job', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const logFile = path.join(tempDir, 'calls.log');
+    const dataDir = path.join(tempDir, 'data');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CLI_LOG = logFile;
+
+    const result = await onboardCustomer({
+      dataDir,
+      fullSync: true,
+      backgroundDeepSync: false,
+    });
+    const status = await onboardingStatus({ dataDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.mode, 'full-sync');
+    assert.equal(result.days, DEFAULT_METRICS_DAYS);
+    assert.deepEqual(result.backgroundDeepSync, { enabled: false });
+    assert.equal(status.backgroundDeepSync.status, 'not_started');
+  });
+});
+
 test('full onboarding prewarms starter questions when supported', async () => {
   await withTempEnv(async (tempDir) => {
     const fakeCli = path.join(tempDir, 'density.mjs');
@@ -1436,8 +1519,8 @@ test('onboarding rejects invalid metrics window before sync', async () => {
     process.env.FAKE_CLI_LOG = logFile;
 
     await assert.rejects(
-      onboardCustomer({ dataDir: path.join(tempDir, 'data'), days: 15 }),
-      /between 1 and 14/
+      onboardCustomer({ dataDir: path.join(tempDir, 'data'), days: 31 }),
+      /between 1 and 30/
     );
     assert.deepEqual(await readFakeLog(logFile), []);
   });
@@ -1483,6 +1566,7 @@ test('metrics preload interval chooses high resolution only for short windows', 
   assert.equal(metricsIntervalForDays(7), '15m');
   assert.equal(metricsIntervalForDays(8), '1h');
   assert.equal(metricsIntervalForDays(14), '1h');
+  assert.equal(metricsIntervalForDays(30), '1h');
 });
 
 test('generic demo customer windows remain bounded separately from metrics windows', () => {

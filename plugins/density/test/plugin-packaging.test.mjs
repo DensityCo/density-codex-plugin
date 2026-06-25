@@ -29,6 +29,7 @@ const EXPECTED_MCP_TOOLS = [
   'install_managed_cli',
   'auth_login',
   'onboard_customer',
+  'onboarding_status',
   'historical_export',
   'create_demo_customer',
   'ask_chart',

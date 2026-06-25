@@ -15,6 +15,7 @@ import {
   localDataProfile,
   localUtilizationQuery,
   onboardCustomer,
+  onboardingStatus,
   repairFastQuestions,
   resolveDataDir,
   sensorHealthReport,
@@ -51,24 +52,34 @@ const tools = [
     },
     additionalProperties: false,
   }),
-  tool('onboard_customer', 'Prepare a starter local customer dataset with staged setup by default; full preload sync requires explicit fullSync.', {
+  tool('onboard_customer', 'Prepare local Density data. Recommended full sync fetches 30 days for all locations now and can continue deeper supported history in the background.', {
     type: 'object',
     properties: {
       dataDir: { type: 'string' },
       orgId: { type: 'string', description: 'Optional organization id to select before syncing.' },
-      days: { type: 'number', minimum: 1, maximum: 14, description: 'Starter metrics preload window. Defaults to 14 days; windows over 7 days use hourly metrics.' },
-      fullSync: { type: 'boolean', description: 'Run starter preload metrics/occupancy/export phases. Defaults false.' },
+      days: { type: 'number', minimum: 1, maximum: 30, description: 'Recent metrics preload window. Defaults to 30 days; windows over 7 days use hourly metrics.' },
+      fullSync: { type: 'boolean', description: 'Run recent metrics/occupancy/export phases. Defaults false.' },
+      backgroundDeepSync: { type: 'boolean', description: 'After the recent preload completes, start a background job for deeper supported history. Defaults true for the recommended 30-day full sync.' },
+      backgroundDeepSyncDays: { type: 'number', minimum: 1, maximum: 365, description: 'Background deeper-history window. Defaults to 365 days.' },
       prewarmQuestions: { type: 'boolean', description: 'After full sync, precompute starter-question answers and chart artifacts when supported. Defaults true.' },
       timeoutSeconds: { type: 'number', minimum: 1, maximum: 600, description: 'Per-command timeout for explicit full sync.' },
     },
     additionalProperties: false,
   }),
-  tool('historical_export', 'Export a larger customer-owned local history window to Parquet. Separate from the fast 14-day starter preload.', {
+  tool('onboarding_status', 'Check Density onboarding progress, including any background deeper-history sync started by onboard_customer.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string' },
+    },
+    additionalProperties: false,
+  }),
+  tool('historical_export', 'Export a larger customer-owned local history window to Parquet. Separate from the fast 30-day recent onboarding preload.', {
     type: 'object',
     properties: {
       dataDir: { type: 'string' },
       orgId: { type: 'string', description: 'Optional organization id to select before exporting.' },
       days: { type: 'number', minimum: 1, maximum: 365, description: 'Historical local export window. Defaults to 90 days.' },
+      until: { type: 'string', description: 'Optional end of the historical export window, e.g. now or 30d. Defaults to now.' },
       timeoutSeconds: { type: 'number', minimum: 1, maximum: 3600, description: 'Per-command timeout for historical export. Defaults to 600 seconds.' },
     },
     additionalProperties: false,
@@ -267,6 +278,8 @@ async function callTool(name, args) {
       return jsonTool(await authLogin(args));
     case 'onboard_customer':
       return jsonTool(await onboardCustomer(args));
+    case 'onboarding_status':
+      return jsonTool(await onboardingStatus(args));
     case 'historical_export':
       return jsonTool(await historicalExport(args));
     case 'create_demo_customer':
