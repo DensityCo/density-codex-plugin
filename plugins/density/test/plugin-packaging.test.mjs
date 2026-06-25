@@ -12,6 +12,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(testDir, '..');
 const repoRoot = path.resolve(pluginRoot, '..', '..');
 const skillsDir = path.join(pluginRoot, 'skills');
+const guidanceDir = path.join(pluginRoot, 'guidance');
 
 const EXPECTED_SKILLS = [
   'benchmarking',
@@ -80,8 +81,18 @@ test('Density skills have valid packaging metadata and shared contracts', async 
   }
 });
 
+test('Density packaged skills mirror shared guidance source', async () => {
+  for (const skillName of EXPECTED_SKILLS) {
+    const packaged = await readFile(path.join(skillsDir, skillName, 'SKILL.md'), 'utf8');
+    const guidance = await readFile(path.join(guidanceDir, 'skills', `${skillName}.md`), 'utf8');
+
+    assert.equal(packaged, guidance, `${skillName} SKILL.md is stale relative to shared guidance`);
+  }
+});
+
 test('Density package files are tracked by git', async () => {
   const pathspecs = [
+    'plugins/density/guidance',
     'plugins/density/skills',
     'plugins/density/assets',
     'plugins/density/scripts',
@@ -101,6 +112,9 @@ test('Density package files are tracked by git', async () => {
 
 test('Density design contract preserves Broadsheet/Tufte chart requirements', async () => {
   const design = await readFile(path.join(pluginRoot, 'assets', 'design.md'), 'utf8');
+  const guidance = await readFile(path.join(guidanceDir, 'design.md'), 'utf8');
+
+  assert.equal(design, guidance, 'packaged design contract is stale relative to shared guidance');
 
   assert.match(design, /Broadsheet\/Tufte/, 'design contract should name the intended analytical aesthetic');
   assert.match(design, /high signal-to-ink ratio/, 'design contract should retain the Tufte-style signal discipline');
@@ -121,6 +135,22 @@ test('Density skills preserve building lifecycle and go-live analysis rules', as
   assert.match(utilization, /chartQueryable/, 'utilization skill should use chart queryability before artifacts');
   assert.match(utilization, /planning, retired, inactive, future go-live, or unknown go-live/, 'utilization skill should disclose non-live or uncertain lifecycle states');
   assert.match(wayfinding, /liveWayfindingEligible/, 'wayfinding skill should require live wayfinding eligibility');
+});
+
+test('Density guidance preserves portable setup, data-health, and live-wayfinding rules', async () => {
+  const density = await readFile(path.join(skillsDir, 'density', 'SKILL.md'), 'utf8');
+  const setup = await readFile(path.join(skillsDir, 'setup', 'SKILL.md'), 'utf8');
+  const dataHealth = await readFile(path.join(skillsDir, 'data-health', 'SKILL.md'), 'utf8');
+  const wayfinding = await readFile(path.join(skillsDir, 'wayfinding', 'SKILL.md'), 'utf8');
+
+  assert.match(density, /30 days/, 'parent skill should describe recent-first 30-day onboarding');
+  assert.match(setup, /recent-first and still filling in deeper history/, 'setup should preserve background history disclosure');
+  assert.match(setup, /- `onboarding_status`/, 'setup should advertise the onboarding status MCP tool');
+  assert.match(dataHealth, /state\.json/, 'data-health should preserve CLI sync-state diagnostics');
+  assert.match(dataHealth, /retry with the same cursor first/, 'data-health should prefer deterministic cursor recovery');
+  assert.match(wayfinding, /presenceBySpace/, 'wayfinding should preserve live floorplan state map guidance');
+  assert.match(wayfinding, /Apply both `refresh` and `live` socket messages/, 'wayfinding should preserve socket message handling');
+  assert.match(wayfinding, /observed timestamp range/, 'wayfinding should preserve signal freshness display guidance');
 });
 
 test('Density MCP server version and tool list match the plugin package', async () => {
