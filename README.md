@@ -69,7 +69,7 @@ The normal CLI path is a plugin-managed runtime installed explicitly with the `i
 
 The first managed runtime asset is published for `darwin-arm64`. Other platforms should use an explicit CLI until their runtime asset is published.
 
-The default setup path prepares a fast starter preload. For broader customer-owned history, use `historical_export`; the plugin should not treat the starter preload as a limit on local data access.
+The default setup path prepares a 30-day recent local preload for all locations and can continue the remaining supported local history in a background job. Agents should use `onboarding_status` to track that job and tell the user when the full supported local history is ready. For explicit separate customer-owned history exports, use `historical_export`; the plugin should not treat the recent preload as a limit on local data access.
 
 ## Guidance Source
 

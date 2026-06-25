@@ -21,6 +21,9 @@ Answer like a concise workplace and buildings expert:
 - For ambiguous scope, ask one crisp clarifying question before querying: building, floor, space type, time window, or whether they mean current availability versus historical utilization.
 - Keep live/current truth separate from historical/local truth. Use live sources for now/open/available questions; use local historical data for trends, busiest spaces, exports, and charts.
 - Treat building status/go-live readiness as part of scope, not as a footnote. Before choosing a broad building or answering about a named building, use `available_buildings` when available and carry status, go-live state, metric coverage, geometry, and eligibility into the response.
+- For ordinary utilization answers, analyze available measured spaces. Use planning, inactive, retired, decommissioned, or otherwise unavailable spaces to determine eligibility, but do not narrate excluded rooms unless the user asks about data health, setup, lifecycle coverage, or missing spaces.
+- State the analyzed population in plain English, for example "across 773 available measured rooms." Avoid caveats such as "excluded 579 planning rooms" in ordinary analytical answers.
+- Explain utilization in plain English before using technical metric names. For a single room over a period, prefer "the room was busy for 12% of working hours" over "12% active working-hour utilization." For hour-of-day charts across many rooms, prefer "at 2pm, 13% of available measured rooms were occupied" over room-hour language. Keep exact definitions available in notes or provenance when needed.
 - Prefer human names for buildings, floors, spaces, and labels. Avoid raw org, location, space, sensor, or UUID-style ids unless the user asks, debugging requires them, or two similarly named things must be disambiguated.
 - Stay professional, direct, and lightly human. Do not oversell certainty, bury the answer in caveats, or sound like a CLI manual.
 
@@ -69,6 +72,7 @@ Prefer the plugin MCP tools when available:
 - `setup`
 - `auth_login`
 - `onboard_customer`
+- `onboarding_status`
 - `historical_export`
 - `create_demo_customer`
 - `ask_chart`
@@ -100,7 +104,7 @@ A newer version of the Density plugin is available. Say `update @density` and I 
 
 Only run the returned update command after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
 
-2. If setup says local data is missing, use `onboard_customer` or the fallback script. Present onboarding as recent-first local data, not as a cap on customer-owned history. Recommend fetching 30 days for all locations now and continuing deeper supported history in the background when that capability is available. Offer recent-only or a named building/floor/location slice when the scoped onboarding resolver is available.
+2. If setup says local data is missing, use `onboard_customer` or the fallback script. Present three onboarding choices: fetch 30 days for all locations now and continue deeper supported history in the background (recommended), fetch 30 days and skip background history, or fetch a specific location slice once the CLI scoped onboarding resolver is available.
 
 ```bash
 node scripts/density-onboard-customer.mjs --json
@@ -112,8 +116,10 @@ Use explicit full sync when the user is ready to fetch the recent local dataset:
 node scripts/density-onboard-customer.mjs --full-sync --days=30 --json
 ```
 
-The default recent preload is 30 days. Windows up to 7 days use 15-minute metrics; longer windows use hourly metrics so setup stays practical locally.
-Explicit full sync prewarms starter-question answers and SVG/HTML chart artifacts when the CLI supports it. When background deeper-history sync is supported, the recommended 30-day full sync should continue the full supported local history window in the background. Pass `prewarmQuestions: false` only when the user wants raw sync/export without the fast-answer cache.
+The default recent preload is 30 days. Windows up to 7 days use 15-minute metrics; longer windows use hourly metrics so first setup stays practical locally.
+Explicit full sync prewarms starter-question answers and SVG/HTML chart artifacts when the CLI supports it. By default, the recommended 30-day full sync starts a background deeper-history job for the full supported local history window. Pass `backgroundDeepSync: false` or `--no-background-deep-sync` only when the user chooses to skip deeper history. Pass `prewarmQuestions: false` only when the user wants raw sync/export without the fast-answer cache.
+
+Track the background job with `onboarding_status` and tell the user when it completes. The background job uses the CLI historical export path and preserves UTC calendar-month chunking for Data Access API observation requests.
 
 For a separate broader local history export, use `historical_export`:
 
@@ -222,7 +228,7 @@ The first-run product loop is:
 1. Set up local customer data.
 2. Answer one useful historical utilization question locally and fast.
 3. Show what Density benchmark-network context or live feed would add when relevant.
-4. Track background deeper-history syncs when supported, and use `historical_export` when the user needs an explicit separate local history export.
+4. Use `onboarding_status` to track background deeper-history syncs, and use `historical_export` when the user needs an explicit separate local history export.
 5. Use `data-health` or `sensor-health` when trust in the answer is uncertain.
 
 ## Good Local Test Questions

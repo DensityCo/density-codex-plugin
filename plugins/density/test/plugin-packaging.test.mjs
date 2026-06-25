@@ -30,6 +30,7 @@ const EXPECTED_MCP_TOOLS = [
   'install_managed_cli',
   'auth_login',
   'onboard_customer',
+  'onboarding_status',
   'historical_export',
   'create_demo_customer',
   'ask_chart',
@@ -144,7 +145,7 @@ test('Density guidance preserves portable setup, data-health, and live-wayfindin
 
   assert.match(density, /30 days/, 'parent skill should describe recent-first 30-day onboarding');
   assert.match(setup, /recent-first and still filling in deeper history/, 'setup should preserve background history disclosure');
-  assert.doesNotMatch(setup, /- `onboarding_status`/, 'setup should not advertise unavailable onboarding_status MCP tool');
+  assert.match(setup, /- `onboarding_status`/, 'setup should advertise the onboarding status MCP tool');
   assert.match(dataHealth, /state\.json/, 'data-health should preserve CLI sync-state diagnostics');
   assert.match(dataHealth, /retry with the same cursor first/, 'data-health should prefer deterministic cursor recovery');
   assert.match(wayfinding, /presenceBySpace/, 'wayfinding should preserve live floorplan state map guidance');
