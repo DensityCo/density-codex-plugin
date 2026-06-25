@@ -71,7 +71,17 @@ The first managed runtime asset is published for `darwin-arm64`. Other platforms
 
 The default setup path prepares a fast starter preload. For broader customer-owned history, use `historical_export`; the plugin should not treat the starter preload as a limit on local data access.
 
-The plugin ships one visual design contract at `plugins/density/assets/design.md`. Edit that file when a customer-specific artifact style is needed.
+## Guidance Source
+
+The plugin keeps portable product guidance in `plugins/density/guidance/`.
+
+Codex still loads the packaged skill files from `plugins/density/skills/*/SKILL.md` and the visual contract from `plugins/density/assets/design.md`. Keep those packaged files mirrored from the shared guidance source; the packaging tests fail when they drift.
+
+Use this split to keep Codex polished while leaving the guidance easy to package for other hosts later. Platform-specific files such as `skills/*/agents/openai.yaml` stay in the Codex skill folders.
+
+The plugin ships one visual design contract at `plugins/density/assets/design.md`, mirrored from `plugins/density/guidance/design.md`. Edit the guidance source and packaged asset together when a customer-specific artifact style is needed.
+
+After changing skill text or plugin packaging, reinstall/update the plugin and start a new Codex thread so the latest skills load. CLI/runtime-only changes can be tested immediately when the managed runtime is pointed at a local dev CLI.
 
 ## Marketplace Layout
 
