@@ -1,0 +1,4 @@
+interface:
+  display_name: "Benchmarking"
+  short_description: "Compare compatible Density benchmark facts."
+  default_prompt: "Use $benchmarking to add an approved, compatible Density benchmark to a utilization answer."

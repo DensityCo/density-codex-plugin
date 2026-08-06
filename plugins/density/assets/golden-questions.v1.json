@@ -1,0 +1,182 @@
+{
+  "contract": "density.golden-questions.v1",
+  "sourceTaskId": "019fd2ed-4413-7fe3-8887-9d879cbf35c1",
+  "runtimeBaseline": "0.1.2",
+  "questions": [
+    {
+      "id": "busiest-meeting-rooms",
+      "site": "SITE-A - Singapore",
+      "question": "At SITE-A - Singapore, what were the busiest meeting rooms over the last 30 days available?",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "least-used-meeting-rooms",
+      "site": "SITE-B - Riverside Campus B1",
+      "question": "At SITE-B - Riverside Campus B1, what were the least-used meeting rooms over the last 30 days available?",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "zero-versus-unmeasured-rooms",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, which rooms had zero observed use, and which were not measured well enough to tell?",
+      "expectedMode": "text",
+      "expectedResult": "measurement_state_ledger"
+    },
+    {
+      "id": "weekday-peak-meeting-room-hour",
+      "site": "SITE-C - Metro Tower",
+      "question": "At SITE-C - Metro Tower, what time were meeting rooms busiest on weekdays?",
+      "expectedMode": "text",
+      "expectedResult": "hourly_ranking"
+    },
+    {
+      "id": "weekday-quiet-meeting-room-hour",
+      "site": "SITE-A - Singapore",
+      "question": "At SITE-A - Singapore, what time were meeting rooms quietest on weekdays?",
+      "expectedMode": "text",
+      "expectedResult": "hourly_ranking"
+    },
+    {
+      "id": "meeting-room-weekday-hour-heatmap",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, show meeting-room utilization by weekday and hour.",
+      "expectedMode": "slide",
+      "expectedArchetype": "utilization_heatmap"
+    },
+    {
+      "id": "weekday-morning-busiest-meeting-rooms",
+      "site": "SITE-B - Riverside Campus B1",
+      "question": "At SITE-B - Riverside Campus B1, which meeting rooms were busiest on weekday mornings?",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "weekday-afternoon-busiest-meeting-rooms",
+      "site": "SITE-C - Metro Tower",
+      "question": "At SITE-C - Metro Tower, which meeting rooms were busiest on weekday afternoons?",
+      "expectedMode": "text",
+      "expectedArchetype": null
+    },
+    {
+      "id": "weekend-busiest-meeting-rooms",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, which meeting rooms were busiest on weekends?",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "most-used-meeting-room-capacities",
+      "site": "SITE-A - Singapore",
+      "question": "At SITE-A - Singapore, which meeting-room capacities were used most?",
+      "expectedMode": "text",
+      "expectedResult": "capacity_bands"
+    },
+    {
+      "id": "least-used-meeting-room-capacities",
+      "site": "SITE-C - Metro Tower",
+      "question": "At SITE-C - Metro Tower, which meeting-room capacities were used least?",
+      "expectedMode": "text",
+      "expectedResult": "capacity_bands"
+    },
+    {
+      "id": "busiest-phone-booths",
+      "site": "SITE-B - Riverside Campus B1",
+      "question": "At SITE-B - Riverside Campus B1, which phone booths were busiest?",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "least-used-phone-booths",
+      "site": "SITE-A - Singapore",
+      "question": "At SITE-A - Singapore, which phone booths were least used?",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "weekday-peak-phone-booth-hour",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, when were phone booths busiest on weekdays?",
+      "expectedMode": "text",
+      "expectedResult": "hourly_ranking"
+    },
+    {
+      "id": "phone-booth-runout-by-floor",
+      "site": "SITE-C - Metro Tower",
+      "question": "At SITE-C - Metro Tower, how often did phone booths run out on each floor?",
+      "expectedMode": "text",
+      "expectedResult": "grouped_saturation"
+    },
+    {
+      "id": "meeting-room-availability-by-floor",
+      "site": "SITE-B - Riverside Campus B1",
+      "question": "At SITE-B - Riverside Campus B1, how often could someone find an open meeting room on each floor?",
+      "expectedMode": "text",
+      "expectedResult": "grouped_saturation"
+    },
+    {
+      "id": "meeting-room-versus-phone-booth-ranking",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, compare the busiest meeting rooms with the busiest phone booths.",
+      "expectedMode": "slide",
+      "expectedArchetype": "ranked_bars_variability"
+    },
+    {
+      "id": "meeting-room-supply-versus-use",
+      "site": "SITE-A - Singapore",
+      "question": "At SITE-A - Singapore, how did measured meeting-room supply compare with observed occupied room-time?",
+      "expectedMode": "text",
+      "expectedResult": "supply_use_scorecard"
+    },
+    {
+      "id": "typical-floor-load",
+      "site": "SITE-B - Riverside Campus B1",
+      "question": "At SITE-B - Riverside Campus B1, what was the typical observed floor load?",
+      "expectedMode": "text",
+      "expectedResult": "floor_load_distribution"
+    },
+    {
+      "id": "floor-load-variability",
+      "site": "SITE-C - Metro Tower",
+      "question": "At SITE-C - Metro Tower, was observed floor load steady or spiky?",
+      "expectedMode": "slide",
+      "expectedArchetype": "distribution"
+    },
+    {
+      "id": "large-room-group-sizes",
+      "site": "SITE-A - Singapore",
+      "question": "At SITE-A - Singapore, what group sizes were observed when large meeting rooms were occupied?",
+      "expectedMode": "text",
+      "expectedResult": "group_size_distribution"
+    },
+    {
+      "id": "space-function-inventory",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, what kinds of spaces are represented?",
+      "expectedMode": "text",
+      "expectedResult": "space_function_inventory"
+    },
+    {
+      "id": "space-function-breakdown",
+      "site": "SITE-B - Riverside Campus B1",
+      "question": "At SITE-B - Riverside Campus B1, show the space-function breakdown.",
+      "expectedMode": "text",
+      "expectedResult": "space_function_inventory"
+    },
+    {
+      "id": "floor-and-space-counts",
+      "site": "SITE-C - Metro Tower",
+      "question": "At SITE-C - Metro Tower, how many floors and available measured spaces are represented?",
+      "expectedMode": "text",
+      "expectedResult": "portfolio_structure"
+    },
+    {
+      "id": "local-utilization-freshness",
+      "site": "SITE-D - Parkview Place",
+      "question": "At SITE-D - Parkview Place, how fresh is the local utilization data?",
+      "expectedMode": "text",
+      "expectedResult": "data_freshness"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Data Health"
+  short_description: "Diagnose local Density data readiness."
+  default_prompt: "Use $data-health to diagnose local Density data freshness, zeros, or sync gaps."

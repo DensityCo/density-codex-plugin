@@ -1,0 +1,4 @@
+interface:
+  display_name: "Setup"
+  short_description: "Set up and sync local Density data."
+  default_prompt: "Use $setup to check Density readiness and prepare local Parquet data."

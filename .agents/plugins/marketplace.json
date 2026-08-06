@@ -1,0 +1,20 @@
+{
+  "name": "densityai",
+  "interface": {
+    "displayName": "Density"
+  },
+  "plugins": [
+    {
+      "name": "density",
+      "source": {
+        "source": "local",
+        "path": "./plugins/density"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

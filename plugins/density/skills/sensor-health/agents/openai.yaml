@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sensor Health"
+  short_description: "Explain Density sensor signal health."
+  default_prompt: "Use $sensor-health to explain Density sensor health and data trust."

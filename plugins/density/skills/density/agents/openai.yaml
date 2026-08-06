@@ -1,0 +1,4 @@
+interface:
+  display_name: "Density"
+  short_description: "Route ordinary Density questions."
+  default_prompt: "Use $density as the front door for my ordinary Density question and route it to the right local, live, benchmark, setup, or health surface."

@@ -1,0 +1,96 @@
+---
+name: setup
+description: Use when the user wants to install, authenticate, check readiness, sync, repair, or prepare local Density data for fast Parquet-first analytics.
+---
+
+# Density Setup
+
+Use this skill for Density installation, auth, setup checks, local data preparation, storage reports, and repair flows.
+
+## Interaction Contract
+
+- Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to trust it.
+- Keep CLI, MCP, shell, cache, and tool-routing mechanics out of user-facing prose unless the user asks, an action is blocked, or those mechanics change the next step.
+- Ask one crisp clarifying question when building, floor, space type, time window, or current-versus-historical scope is ambiguous.
+- Keep local historical data, live availability, benchmark context, and sensor health separate.
+- Prefer human-readable names and labels. Avoid raw ids unless the user asks or debugging requires them.
+
+## Progress Update Contract
+
+Keep user-visible progress updates at the workplace level:
+
+- Say what decision you are making for the user, not which skill, MCP tool, CLI command, cache path, SQL query, or local file is being used.
+- Do not mention parser misses, reserved SQL words, DuckDB internals, shell commands, skill loading, or tool routing unless the user explicitly asks for debugging.
+- If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed to trust the final answer.
+- Good updates sound like: "I am checking the local historical window and office scope" or "I am using complete local business days (weekdays within the stated local working-hours window) so a partial day does not understate utilization."
+
+Prefer the plugin MCP tools when available:
+
+- `setup`
+- `install_managed_cli`
+- `auth_login`
+- `onboard_customer`
+- `onboarding_status`
+- `historical_export`
+- `create_demo_customer`
+- `storage_report`
+- `available_buildings`
+- `starter_questions`
+- `repair_fast_questions`
+
+Fallback scripts live in the plugin root under `scripts/`.
+
+## Workflow
+
+1. Run setup or `node scripts/density-setup.mjs --json`.
+2. If setup says a plugin update is available, tell the user: "A newer version of the Density plugin is available. Say `update @density` and I can install it." Run the returned update command only after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
+3. If setup asks for the managed CLI runtime, use `install_managed_cli`. This is an explicit download/copy action that verifies the manifest checksum before installing into `~/.density-cli/plugin-runtime/`.
+4. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
+5. If Parquet or fast-question inputs are missing, present the onboarding choices from setup/onboard_customer. Recommend fetching 30 days for all locations now and continuing the remaining supported history in the background.
+6. If generic Parquet exists but normalized fast-question metadata or the prepared metrics cache is missing, use `repair_fast_questions`. Verify that it publishes a valid organization-scoped prepared cache; normal questions fall back to canonical local views on a cache miss.
+7. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
+8. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
+9. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
+10. Use `onboarding_status` to check a background deeper-history job and tell the user when the full supported local history is ready. Use `historical_export` when the user explicitly asks for a separate broader customer-owned local history export.
+
+Normal setup should not run `npm install` or build the CLI from source. Use `DENSITY_CLI_REPO` plus `DENSITY_CLI_BUILD_FROM_SOURCE=1` only for explicit development work.
+
+## Local Storage Contract
+
+Parquet is durable. DuckDB is the query engine and cache.
+
+Good local analytics stores include canonical Parquet tables plus normalized fast-question inputs such as:
+
+- `spaces`
+- `space_labels`
+- `space_children`
+- `space_metrics`
+- `space_occupancy`
+
+Treat `parquetReady` as necessary but not sufficient for utilization. For fast historical questions, also check `fastQuestionsReady` and starter-cache usefulness when available.
+
+## Onboarding Choices
+
+When setup reaches local data preparation, present these choices:
+
+- Recommended: fetch 30 days for all locations now, then run the remaining supported history in the background.
+- Recent only: fetch 30 days for all locations and skip the background history job.
+- Specific location: fetch a named building, floor, or location slice once the CLI exposes a scoped onboarding resolver.
+
+Windows up to 7 days may use 15-minute metrics; longer windows use hourly metrics to keep setup practical. Background deeper-history sync uses the CLI historical export path, which splits Data Access API observation requests at UTC calendar-month boundaries.
+
+Do not describe the recent preload as a limit on customer access to their own data. Until the background job completes, answers should disclose that local history is recent-first and still filling in deeper history.
+
+The onboarding background sync that fills deeper supported history is distinct from the per-question freshness refresh. Ordinary historical questions answer immediately from the current local snapshot. Only an eligible completed all-spaces metrics snapshot older than 24 hours may start one organization-deduplicated background metrics refresh; a failed refresh preserves the answer, and a per-space or unknown scope never broadens. A successful freshness refresh rebuilds the prepared metrics cache. Use explicit sync, onboarding status, or data-health recovery when deeper history, unsupported scope, or repair is required.
+
+## Wayfinding Readiness
+
+Setup should also prepare live wayfinding without pulling historical utilization just for wayfinding:
+
+- spaces and labels
+- building/floor hierarchy
+- floorplans and geometry
+- identifiers needed by the real-time availability hook
+
+Do not ask users to set up API tokens for wayfinding. Live wayfinding should use the stored browser-auth Atlas session and the user's Density permissions.
+Do not call latest synced data "live" unless the command used a true live availability hook.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wayfinding"
+  short_description: "Show live Density availability."
+  default_prompt: "Use $wayfinding to show real-time Density availability on a floorplan."
