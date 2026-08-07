@@ -7,6 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
+import semver from 'semver';
 import {
   analyticSlide,
   answerDensityQuestion,
@@ -209,9 +210,12 @@ test('all Density skills carry the shared interaction contract', async () => {
   }
 });
 
-test('plugin manifest version reflects the managed runtime 0.1.3 release', async () => {
+test('plugin manifest exposes a strict SemVer version and managed runtime contract', async () => {
   const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.1.12');
+  const parsedVersion = semver.parse(manifest.version, { loose: false });
+  assert.ok(parsedVersion);
+  assert.equal(semver.valid(manifest.version), manifest.version);
+  assert.equal(parsedVersion.build.length, 0);
   assert.equal(manifest.managedCli.enabled, true);
   assert.equal(manifest.managedCli.requiredCapabilities.commands.includes('questionSnapshotRefresh'), false);
   assert.ok(manifest.managedCli.optionalCapabilities.commands.includes('questionAnalyticArtifact'));
@@ -269,6 +273,7 @@ test('capability discovery caches by runtime identity, invalidates on runtime ch
 });
 
 test('plugin update check exposes update-at-density prompt and reinstall command', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
   await withTempEnv(async () => {
     process.env.DENSITY_PLUGIN_LATEST_MANIFEST_URL = 'data:application/json,{"version":"99.0.0"}';
 
@@ -276,7 +281,7 @@ test('plugin update check exposes update-at-density prompt and reinstall command
 
     assert.equal(update.checked, true);
     assert.equal(update.available, true);
-    assert.equal(update.current, '0.1.12');
+    assert.equal(update.current, manifest.version);
     assert.equal(update.latest, '99.0.0');
     assert.equal(update.userPrompt, 'update @density');
     assert.equal(update.displayPrompt, 'update [@density](plugin://density@densityai)');
