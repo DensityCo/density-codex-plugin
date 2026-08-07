@@ -28,7 +28,7 @@ Route ordinary Density questions through `answer_density_question` before narrow
 
 Do not add metrics, time windows, freshness checks, exclusions, caveats, or presentation language. Those additions can change the analytic intent.
 
-For delegated prompts such as "pick any building," select a scope only when the user explicitly delegates the choice and it is live, measured, and past go-live. Otherwise ask one question. Clarification results use `density.clarification_request.v1` and the `density.clarification` contract.
+When the user delegates scope selection, select a scope only when that delegation is explicit and the scope is live, measured, and past go-live. Otherwise ask one question. Clarification results use `density.clarification_request.v1` and the `density.clarification` contract.
 
 Treat `orchestration.terminal` as final for the current turn:
 

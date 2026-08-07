@@ -114,9 +114,9 @@ Every analytical artifact should make these visible when they matter:
 
 ## Governed Themes
 
-- The Density CLI theme registry is an authorized render-time selector. Implementations may expose a `theme` option accepting the ten named registry themes (`institutional`, `product_clean`, `editorial`, `swiss`, `boardroom_dark`, `ft_editorial`, `monograph`, `blueprint`, `humanist`, `newsprint_mono`), the three accent presets (`density_blue`, `indigo`, `deep_teal`), or a customer `#RRGGBB` brand accent gated by the CLI's reserved-hue and contrast checks.
+- The Density CLI theme registry is an authorized render-time selector. Implementations may expose a `theme` option accepting the nine named registry themes (`product_clean`, `editorial`, `swiss`, `boardroom_dark`, `ft_editorial`, `monograph`, `blueprint`, `humanist`, `newsprint_mono`), the three accent presets (`density_blue`, `indigo`, `deep_teal`), or a customer `#RRGGBB` brand accent gated by the CLI's reserved-hue and contrast checks.
 - A named theme restyles surfaces, ink ramps, type families, and data accents only. Every theme inherits the immutable editorial constitution, the semantic encoding rules, the fixed slide zones, and the reserved trust encodings; no theme may reposition a zone or repurpose a reserved color.
-- When no theme is selected, the canonical Broadsheet constitution renders unchanged.
+- When no theme is selected, non-interactive and headless rendering uses `product_clean` as the deterministic fallback.
 - See `references/slide-orchestration.md` under the density skill for the orchestration contract that governs theme and chart-family selection.
 
 ## Future Governed Editions
