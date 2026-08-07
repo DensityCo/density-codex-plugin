@@ -52,6 +52,7 @@ const SOURCE_BADGES = {
   [SOURCE_LAYERS.cloudSensorHealth]: 'Live',
 };
 const chartContextCache = new Map();
+const pendingThemeElectionCache = new Map();
 
 const oneLine = (value) => String(value ?? '').trim();
 const sourceBadgeFor = (sourceLayer) => SOURCE_BADGES[sourceLayer] ?? 'Mixed';
@@ -66,31 +67,249 @@ const resolvePresentation = (value, defaultPresentation) => {
   return presentation;
 };
 
-// Render-time theme selection value space mirrored from the Density CLI
-// (src/analytic-artifact.ts): registry theme ids, accent presets, or a
-// 6-digit #RRGGBB brand accent.
-const THEME_REGISTRY_IDS = [
-  'institutional',
-  'product_clean',
-  'editorial',
-  'swiss',
-  'boardroom_dark',
-  'ft_editorial',
-  'monograph',
-  'blueprint',
-  'humanist',
-  'newsprint_mono',
-];
-const THEME_PRESETS = ['density_blue', 'indigo', 'deep_teal'];
+const HEX_BRAND_ACCENT = /^#[0-9a-fA-F]{6}$/;
+const THEME_VALUE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 
-const resolveTheme = (value) => {
-  if (value === undefined || value === null) return undefined;
-  const theme = String(value).trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(theme)) return theme;
-  const name = theme.toLowerCase();
-  if (THEME_REGISTRY_IDS.includes(name) || THEME_PRESETS.includes(name)) return name;
-  throw new Error(`theme must be one of ${[...THEME_REGISTRY_IDS, ...THEME_PRESETS].join(', ')}, or a 6-digit hex brand accent like #1A6B54.`);
+const hasExactKeys = (value, keys) => (
+  isRecord(value)
+  && Object.keys(value).length === keys.length
+  && keys.every((key) => Object.hasOwn(value, key))
+);
+
+const themeAliasKey = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const humanizeThemeValue = (value) => value.split('_').map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`).join(' ');
+
+const validatedThemeVocabulary = (value) => {
+  if (!hasExactKeys(value, ['kind', 'registry', 'presets', 'customBrandAccent'])
+    || value.kind !== 'density.analytic-theme-selections.v1'
+    || !Array.isArray(value.registry)
+    || value.registry.length === 0
+    || !Array.isArray(value.presets)
+    || !hasExactKeys(value.customBrandAccent, ['format'])
+    || value.customBrandAccent.format !== '#RRGGBB') {
+    throw new Error('Density theme list did not match density.analytic-theme-selections.v1.');
+  }
+  const registry = value.registry.map((entry) => {
+    if (!hasExactKeys(entry, ['value', 'label'])
+      || typeof entry.value !== 'string'
+      || !THEME_VALUE.test(entry.value)
+      || typeof entry.label !== 'string'
+      || !entry.label.trim()) {
+      throw new Error('Density theme list contained a malformed registry selection.');
+    }
+    return { value: entry.value, label: entry.label.trim() };
+  });
+  const presets = value.presets.map((entry) => {
+    if (!hasExactKeys(entry, ['value', 'accent'])
+      || typeof entry.value !== 'string'
+      || !THEME_VALUE.test(entry.value)
+      || typeof entry.accent !== 'string'
+      || !HEX_BRAND_ACCENT.test(entry.accent)) {
+      throw new Error('Density theme list contained a malformed preset selection.');
+    }
+    return { value: entry.value, accent: entry.accent };
+  });
+  const values = [...registry.map((entry) => entry.value), ...presets.map((entry) => entry.value)];
+  if (new Set(values).size !== values.length) {
+    throw new Error('Density theme list contained duplicate selection values.');
+  }
+  const aliases = new Map();
+  const addAlias = (alias, selection) => {
+    const key = themeAliasKey(alias);
+    if (!key) return;
+    const matches = aliases.get(key) ?? new Set();
+    matches.add(selection);
+    aliases.set(key, matches);
+  };
+  for (const entry of registry) {
+    addAlias(entry.value, entry.value);
+    addAlias(entry.label, entry.value);
+    addAlias(humanizeThemeValue(entry.value), entry.value);
+  }
+  for (const entry of presets) {
+    addAlias(entry.value, entry.value);
+    addAlias(humanizeThemeValue(entry.value), entry.value);
+  }
+  return {
+    registry,
+    presets,
+    values: new Set(values),
+    aliases,
+    customBrandAccent: { format: '#RRGGBB' },
+  };
 };
+
+const themeSelectionForValue = (value, vocabulary) => {
+  if (HEX_BRAND_ACCENT.test(value)) return { brand_accent: value };
+  if (vocabulary.registry.some((entry) => entry.value === value)) return { theme: value };
+  if (vocabulary.presets.some((entry) => entry.value === value)) return { preset: value };
+  return undefined;
+};
+
+const validatedThemePreference = (value, vocabulary) => {
+  if (!hasExactKeys(value, ['kind', 'selected', 'selection', 'value'])
+    || value.kind !== 'density.analytic-theme-preference.v1'
+    || typeof value.selected !== 'boolean') {
+    throw new Error('Density theme preference did not match density.analytic-theme-preference.v1.');
+  }
+  if (value.selected === false) {
+    if (value.selection !== null || value.value !== null) {
+      throw new Error('Density theme preference reported an inconsistent empty selection.');
+    }
+    return { selected: false, selection: null, value: null };
+  }
+  if (typeof value.value !== 'string') {
+    throw new Error('Density theme preference omitted its selected value.');
+  }
+  const selection = themeSelectionForValue(value.value, vocabulary);
+  if (!selection
+    || !hasExactKeys(value.selection, Object.keys(selection))
+    || value.selection[Object.keys(selection)[0]] !== Object.values(selection)[0]) {
+    throw new Error('Density theme preference contained an unknown or inconsistent selection.');
+  }
+  return { selected: true, selection, value: value.value };
+};
+
+const themeChoice = (raw, vocabulary, { structured = false } = {}) => {
+  if (raw === undefined || raw === null) return { state: 'missing' };
+  const text = String(raw).trim().replace(/[.!?]+$/, '').trim();
+  if (HEX_BRAND_ACCENT.test(text)) return { state: 'selected', value: text };
+  if (structured) {
+    const value = text.toLowerCase();
+    return vocabulary.values.has(value)
+      ? { state: 'selected', value }
+      : { state: 'invalid' };
+  }
+  const parts = text
+    .replace(/^the\s+/i, '')
+    .replace(/\bthemes?\b/ig, '')
+    .split(/\s*(?:,|\/|\b(?:and|or)\b)\s*/i)
+    .filter(Boolean);
+  const matches = new Set();
+  for (const part of parts) {
+    if (HEX_BRAND_ACCENT.test(part)) {
+      matches.add(part);
+      continue;
+    }
+    for (const match of vocabulary.aliases.get(themeAliasKey(part)) ?? []) matches.add(match);
+  }
+  if (matches.size === 1) return { state: 'selected', value: [...matches][0] };
+  if (matches.size > 1) return { state: 'ambiguous' };
+  return { state: 'invalid' };
+};
+
+const themeAvailabilityIntent = (question) => (
+  /\b(?:what|which|show|list)\b[^?.!]*\bthemes?\b[^?.!]*\b(?:available|options?|choose|choices|have)\b/i.test(question)
+  || /\b(?:available|theme)\s+(?:themes?|options?|choices)\b/i.test(question)
+);
+
+const themeChangeIntent = (question) => (
+  /\b(?:change|switch|set|choose|pick)\b[^?.!]*\b(?:themes?|colou?rs?)\b/i.test(question)
+  || /\b(?:themes?|colou?rs?)\b[^?.!]*\b(?:change|switch|different|another)\b/i.test(question)
+);
+
+const cleanThemeRewrite = (question) => question
+  .replace(/\s+([?.!,;:])/g, '$1')
+  .replace(/\s{2,}/g, ' ')
+  .replace(/^[,;:]\s*|\s*[,;:]$/g, '')
+  .trim();
+
+const embeddedThemeRequest = (question, vocabulary) => {
+  const structuralMatches = [];
+  const explicitPatterns = [
+    /\b(?:change|switch|set)\s+(?:the\s+)?(?:themes?|colou?rs?)\s+(?:to|as|using)\s+([^?.!]+?)(?:\s+themes?)?(?=[?.!]?\s*$)/ig,
+    /\b(?:using|with|in)\s+(?:the\s+)?([^?.!]+)\s+themes?\b/ig,
+  ];
+  for (const pattern of explicitPatterns) {
+    for (const match of question.matchAll(pattern)) {
+      structuralMatches.push({
+        ...themeChoice(match[1], vocabulary),
+        index: match.index,
+        length: match[0].length,
+      });
+    }
+  }
+  const trailingMarker = /\b(?:using|with|in)\s+(?:the\s+)?/ig;
+  for (const match of question.matchAll(trailingMarker)) {
+    const raw = question.slice(match.index + match[0].length).replace(/[?.!]+\s*$/, '').trim();
+    const choice = themeChoice(raw, vocabulary);
+    if (choice.state === 'selected' || choice.state === 'ambiguous') {
+      structuralMatches.push({
+        ...choice,
+        index: match.index,
+        length: question.length - match.index - (question.match(/[?.!]\s*$/)?.[0].length ?? 0),
+      });
+    }
+  }
+  const selected = structuralMatches.sort((left, right) => right.index - left.index)[0];
+  if (selected) {
+    const rewritten = cleanThemeRewrite(`${question.slice(0, selected.index)}${question.slice(selected.index + selected.length)}`);
+    return { state: selected.state, value: selected.value, rewritten, matched: true };
+  }
+  return { state: 'missing', rewritten: question, matched: false };
+};
+
+const isThemeOnlyQuestion = (value) => (
+  !value
+  || /^(?:do|show|render|make)(?:\s+(?:it|that|this))?(?:\s+again)?[?.!]?$/i.test(value)
+);
+
+const themeElectionKey = (dataDir, question) => `${chartContextKey(dataDir)}\0${question}`;
+
+const themeClarificationContract = ({ question, vocabulary, reason }) => ({
+  kind: 'density.clarification_request.v1',
+  contract: 'density.clarification',
+  reason,
+  question,
+  prompt: reason === 'analytic_theme_ambiguous'
+    ? 'I found more than one theme. Which one should I use?'
+    : 'Which slide theme should I use?',
+  requiredChoiceCount: 1,
+  suggestions: [
+    ...vocabulary.registry.map(({ value, label }) => ({ id: value, label })),
+    ...vocabulary.presets.map(({ value, accent }) => ({ id: value, label: humanizeThemeValue(value), accent })),
+  ],
+  freeform: {
+    enabled: true,
+    label: 'Enter a theme choice or a custom brand accent.',
+    format: vocabulary.customBrandAccent.format,
+  },
+  nextActionAfterAnswer: {
+    id: 'answer_density_question',
+    label: 'Apply the selected theme.',
+  },
+  responseSemantics: {
+    answer: false,
+    chart: false,
+    benchmark: false,
+    writesArtifacts: false,
+  },
+});
+
+const themeClarificationResponse = ({ question, dataDir, vocabulary, reason, purpose = 'render_original' }) => {
+  const clarificationRequest = themeClarificationContract({ question, vocabulary, reason });
+  pendingThemeElectionCache.set(themeElectionKey(dataDir, question), { purpose, reason });
+  return {
+    ok: false,
+    ...clarificationRequest,
+    clarificationRequest,
+    intent: 'analytic_theme_selection',
+    message: clarificationRequest.prompt,
+    chartSuppressed: true,
+    dataDir,
+  };
+};
+
+const themeBlockedResponse = ({ question, dataDir, reason, message }) => ({
+  ok: false,
+  blocked: true,
+  reason,
+  question,
+  intent: 'analytic_theme_preference_blocked',
+  message,
+  chartSuppressed: true,
+  dataDir,
+});
 
 const presentationDelivery = ({ requested, slideSupported, response }) => {
   if (requested !== 'slide') return undefined;
@@ -231,11 +450,44 @@ const BUILDING_REFERENCE_PATTERN = new RegExp(
   'i',
 );
 const DAY_NAME_PATTERN = /\b(mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/i;
-const TIME_RANGE_PATTERN = /\b(?:from|between)\s+\d{1,2}\s*(?:a|p)?\.?m?\.?\s*(?:to|through|until|and|-)\s+\d{1,2}\s*(?:a|p)?\.?m?\.?\b/i;
+const CLOCK_TIME_SOURCE = String.raw`\d{1,2}(?::\d{2})?\s*(?:a|p)?\.?m?\.?`;
+const TIME_RANGE_PATTERN = new RegExp(String.raw`\b(?:(?:from|between|use)\s+)?(${CLOCK_TIME_SOURCE})\s*(?:to|through|until|and|-)\s*(${CLOCK_TIME_SOURCE})\b`, 'i');
 const AFTER_TIME_PATTERN = /\bafter\s+\d{1,2}\s*(?:a|p)\.?m\.?\b/i;
 const DAYPART_PATTERN = /\b(morning|afternoon|evening|around lunch|lunch|working hours|business hours)\b/i;
 
 const cleanSpaces = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+const clockHour = (value) => {
+  const match = String(value ?? '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*([ap])?\.?m?\.?$/i);
+  if (!match) return undefined;
+  let hour = Number(match[1]);
+  const minutes = Number(match[2] ?? 0);
+  const meridiem = match[3]?.toLowerCase();
+  if (minutes > 59 || hour > (meridiem ? 12 : 23)) return undefined;
+  if (meridiem === 'a' && hour === 12) hour = 0;
+  if (meridiem === 'p' && hour < 12) hour += 12;
+  return hour + (minutes / 60);
+};
+
+const requestedOperatingHours = (question) => {
+  const match = String(question ?? '').match(TIME_RANGE_PATTERN);
+  if (!match) return undefined;
+  let start = clockHour(match[1]);
+  let end = clockHour(match[2]);
+  if (start === undefined || end === undefined) return undefined;
+  const endHasMeridiem = /[ap]\.?m?\.?$/i.test(cleanSpaces(match[2]));
+  if (!endHasMeridiem && end <= start && end <= 12) end += 12;
+  if (end <= start || end > 24) return undefined;
+  const label = `${cleanSpaces(match[1]).replace(/\./g, '')}-${cleanSpaces(match[2]).replace(/\./g, '')}`;
+  return { start, end, label, source: 'user_requested' };
+};
+
+const operatingHoursMatch = (actual, requested) => (
+  actual
+  && requested
+  && actual.start === requested.start
+  && actual.end === requested.end
+);
 
 const withoutPriorFloor = (value) => cleanSpaces(
   value
@@ -253,7 +505,7 @@ const withoutPriorDayFilter = (value) => cleanSpaces(
 
 const withoutPriorTimeFilter = (value) => cleanSpaces(
   value
-    .replace(/\b(?:from|between)\s+\d{1,2}\s*(?:a|p)?\.?m?\.?\s*(?:to|through|until|and|-)\s+\d{1,2}\s*(?:a|p)?\.?m?\.?\b/ig, ' ')
+    .replace(new RegExp(TIME_RANGE_PATTERN.source, 'ig'), ' ')
     .replace(/\bafter\s+\d{1,2}\s*(?:a|p)\.?m\.?\b/ig, ' ')
     .replace(/\b(?:in the\s+)?(?:morning|afternoon|evening)\b/ig, ' ')
     .replace(/\b(?:around\s+)?lunch\b/ig, ' ')
@@ -287,7 +539,7 @@ const contextualFilterRewrite = (rewritten, question) => {
   const afterTimeMatch = question.match(AFTER_TIME_PATTERN);
   const daypartMatch = question.match(DAYPART_PATTERN);
   if (timeRangeMatch) {
-    next = `${withoutPriorTimeFilter(next)} ${timeRangeMatch[0]}`;
+    next = `${withoutPriorTimeFilter(next)} from ${cleanSpaces(timeRangeMatch[1])} to ${cleanSpaces(timeRangeMatch[2])}`;
   } else if (afterTimeMatch) {
     next = `${withoutPriorTimeFilter(next)} ${afterTimeMatch[0]}`;
   } else if (daypartMatch) {
@@ -316,10 +568,6 @@ const rewriteContextualQuestion = (question, prior) => {
     && !/\b(normaliz(?:e|ed|ing)|normalis(?:e|ed|ing)|average|avg|per day)\b/i.test(rewritten)) {
     rewritten = `${rewritten} average occupied hours per day`;
   }
-  const explicitRange = /\b(?:from|between|use)?\s*(?:like\s*)?(six|6)\s*a\.?m\.?\s*(?:to|through|until|and|-)\s*(?:like\s*)?(six|6)\s*p\.?m\.?\b/i.test(question);
-  if (explicitRange && !/\b6\s*a\.?m\.?\s*(?:to|through|until|and|-)\s*6\s*p\.?m\.?\b/i.test(rewritten)) {
-    rewritten = `${rewritten} from 6am to 6pm`;
-  }
   return contextualFilterRewrite(rewritten, question);
 };
 
@@ -333,23 +581,26 @@ const dataCoverageIntent = (question) =>
 
 const broadScopeSelectionIntent = (question) => (
   /\b(any one|any 1|pick (?:one|a)|choose (?:one|a)|select (?:one|a)|one (?:of|building|site|office|location))\b/i.test(question)
-  && /\b(buildings?|sites?|offices?|locations?)\b/i.test(question)
+  && LOCATION_SCOPE_PATTERN.test(question)
 );
 
-const noMatchingLocalScope = ({ title = '', subtitle = '' } = {}) => (
-  /\bno matching local scope\b/i.test(title)
-  || /\bnot found in local (?:atlas )?metadata\b/i.test(subtitle)
-);
+const noMatchingLocalScope = ({ scopeResolution } = {}) => scopeResolution === 'no_match';
 
 const dataHealthIntent = (question) =>
   dataCoverageIntent(question)
-  || /\b(can (?:we|i) trust|trustworthy|diagnos(?:e|is|tic)|data[-\s]?health|why (?:is|are).*(?:zero|missing|stale)|all .*zero|zeros?|stale (?:data|cache|local data)|missing (?:data|metrics|rows)|fresh(?:ness)? of (?:the )?(?:data|cache|local data)|is (?:the )?(?:data|cache|local data).*(?:fresh|stale|ready)|sync gaps?|data gaps?)\b/i.test(question);
+  || /\b(can (?:we|i) trust|trustworthy|diagnos(?:e|is|tic)|data[-\s]?health|why (?:is|are).*(?:missing|stale)|(?:data|metrics?|rows?|charts?).*zeros?|zeros?.*(?:data|metrics?|rows?|charts?)|stale (?:data|cache|local data)|missing (?:data|metrics|rows)|fresh(?:ness)? of (?:the )?(?:data|cache|local data)|is (?:the )?(?:data|cache|local data).*(?:fresh|stale|ready)|sync gaps?|data gaps?)\b/i.test(question);
+
+const sensorSubjectIntent = (question) =>
+  /\b(sensor(?:s)?|sensor[-\s]?health|live signal|presence signal|health of (?:the )?sensor|signal stale|stale signal)\b/i.test(question);
+
+const historicalSensorUtilizationIntent = (question) =>
+  /\b(historical|history|trend|over time|last|past|yesterday|weeks?|months?|quarters?|years?)\b/i.test(question)
+  && /\b(utili[sz](?:e|ed|ation)|occupancy|occupied|usage|performance|busiest|least used|underused)\b/i.test(question);
 
 const sensorHealthIntent = (question) => {
-  const historicalUtilization = /\b(historical|history|trend|over time|last|past|yesterday|weeks?|months?|quarters?|years?)\b/i.test(question)
-    && /\b(utili[sz](?:e|ed|ation)|occupancy|occupied|usage|performance|busiest|least used|underused)\b/i.test(question);
-  if (historicalUtilization) return false;
-  return /\b(sensor(?:s)?|sensor[-\s]?health|live signal|presence signal|health of (?:the )?sensor|signal stale|stale signal)\b/i.test(question);
+  if (historicalSensorUtilizationIntent(question)) return false;
+  const healthOrStatus = /\b(health|healthy|unhealthy|status|online|offline|error|errors|unconfigured|heartbeat|heartbeats|reporting|stale|degraded|mapping|mapped|attention|operational readiness|live signal|presence signal)\b/i.test(question);
+  return sensorSubjectIntent(question) && healthOrStatus;
 };
 
 const metadataQuestionIntent = (question) => {
@@ -397,17 +648,21 @@ const metadataQuestionRouting = (intent) => intent
     }
   : undefined;
 
+const LOCATION_SCOPE_PATTERN = /\b(buildings?|sites?|offices?|locations?)\b/i;
+const AVAILABILITY_SUBJECT_PATTERN = /\b(people|persons?|occupants?|meeting rooms?|conference rooms?|rooms?|phone booths?|booths?|desks?|seats?|spaces?|floors?|where|wayfinding)\b/i;
+
 const historicalAvailabilityIntent = (question) =>
-  /\b(how often|frequency|percent|percentage|share of time|historical|history|trend|over time|last|past|weekday|weekend|rank(?:ing)?|popular|busiest|least used|most occupied|least occupied|utili[sz]ation|used hours?|average|avg|observed|measured)\b/i.test(question);
+  DAY_NAME_PATTERN.test(question)
+  || /\b(how often|frequency|percent|percentage|share of time|historical|history|trend|over time|last|past|weekday|weekend|rank(?:ing)?|popular|busiest|least used|most occupied|least occupied|utili[sz]ation|used hours?|average|avg|observed|measured)\b/i.test(question);
 
 const availabilityScopeIntent = (question) =>
-  /\b(meeting rooms?|conference rooms?|rooms?|phone booths?|booths?|desks?|seats?|spaces?|floors?|buildings?|where|wayfinding)\b/i.test(question);
+  AVAILABILITY_SUBJECT_PATTERN.test(question) || LOCATION_SCOPE_PATTERN.test(question);
 
 const currentAvailabilityIntent = (question) => {
   if (/\b(local historical data|available local data|what data do we have)\b/i.test(question)) return false;
   const availabilityText = question.replace(/\bopen collaboration spaces?\b/ig, 'collaboration spaces');
   const liveWord = /\b(now|right now|currently|current|live|real[-\s]?time|wayfinding)\b/i.test(question);
-  const availabilityWord = /\b(available|availability|open|occupied|free|empty|vacant)\b/i.test(availabilityText);
+  const availabilityWord = /\b(available|availability|open|occupied|free|empty|vacant|people|persons?|occupants?)\b/i.test(availabilityText);
   const scoped = availabilityScopeIntent(question);
   if (liveWord && (availabilityWord || scoped)) return true;
   if (/\b(?:available|open|occupied|free|empty|vacant)\s+now\b/i.test(availabilityText)) return true;
@@ -556,6 +811,264 @@ const parseJsonOutput = (stdout, label) => {
   } catch (error) {
     throw new Error(`${label} was not JSON: ${error.message}`);
   }
+};
+
+const runThemeJsonCommand = async ({ cli, args, dataDir, timeoutMs, label }) => {
+  const result = await runDensity(cli, args, {
+    dataDir,
+    allowFailure: true,
+    timeoutMs: Math.max(1, timeoutMs),
+  });
+  if (result.code !== 0 || result.timedOut) {
+    throw new Error(result.timedOut
+      ? `${label} timed out.`
+      : oneLine(result.stderr || result.stdout) || `${label} failed.`);
+  }
+  return parseJsonOutput(result.stdout, label);
+};
+
+const loadThemeState = async ({ cli, dataDir, capabilities, remainingMs }) => {
+  if (capabilities?.commands?.analyticThemePreference !== true) {
+    return {
+      ok: false,
+      reason: 'analytic_theme_preference_unsupported',
+      message: 'The installed Density runtime does not support analytic theme preference commands.',
+    };
+  }
+  try {
+    const timeoutMs = remainingMs();
+    const [listPayload, preferencePayload] = await Promise.all([
+      runThemeJsonCommand({
+        cli,
+        args: ['theme', 'list'],
+        dataDir,
+        timeoutMs,
+        label: 'Density theme list',
+      }),
+      runThemeJsonCommand({
+        cli,
+        args: ['theme', 'get'],
+        dataDir,
+        timeoutMs,
+        label: 'Density theme preference',
+      }),
+    ]);
+    const vocabulary = validatedThemeVocabulary(listPayload);
+    const preference = validatedThemePreference(preferencePayload, vocabulary);
+    return { ok: true, vocabulary, preference };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'analytic_theme_contract_invalid',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+};
+
+const setThemePreference = async ({ cli, dataDir, vocabulary, value, remainingMs }) => {
+  let payload;
+  try {
+    payload = await runThemeJsonCommand({
+      cli,
+      args: ['theme', 'set', value],
+      dataDir,
+      timeoutMs: remainingMs(),
+      label: 'Density theme preference update',
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'analytic_theme_preference_write_failed',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  try {
+    const preference = validatedThemePreference(payload, vocabulary);
+    if (!preference.selected || preference.value !== value) {
+      throw new Error('Density theme preference update returned a different selection.');
+    }
+    return { ok: true, preference };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'analytic_theme_preference_write_failed',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+};
+
+const themePreferenceUpdatedResponse = ({ question, dataDir, value }) => ({
+  ok: true,
+  question,
+  dataDir,
+  intent: 'analytic_theme_preference_updated',
+  message: `Saved ${value} as the default analytic theme.`,
+  themePreference: { selected: true, value },
+  chartSuppressed: true,
+});
+
+const themeFollowUpNeedsQuestion = ({ question, dataDir }) => {
+  const clarificationRequest = {
+    kind: 'density.clarification_request.v1',
+    contract: 'density.clarification',
+    reason: 'analytic_theme_follow_up_needs_question',
+    question,
+    prompt: 'Which analytic question should I render in that theme?',
+    requiredChoiceCount: 1,
+    suggestions: [],
+    freeform: { enabled: true, label: 'Enter the analytic question to render.' },
+    nextActionAfterAnswer: { id: 'answer_density_question', label: 'Render the selected analytic question.' },
+    responseSemantics: { answer: false, chart: false, benchmark: false, writesArtifacts: false },
+  };
+  return {
+    ok: false,
+    ...clarificationRequest,
+    clarificationRequest,
+    intent: 'analytic_theme_follow_up_needs_question',
+    message: clarificationRequest.prompt,
+    chartSuppressed: true,
+    dataDir,
+  };
+};
+
+const prepareAnalyticThemeRequest = async ({
+  question,
+  dataDir,
+  cli,
+  capabilities,
+  remainingMs,
+  explicitTheme,
+  clarificationAnswer,
+  priorChart,
+}) => {
+  const loaded = await loadThemeState({ cli, dataDir, capabilities, remainingMs });
+  if (!loaded.ok) {
+    return {
+      state: 'response',
+      response: themeBlockedResponse({ question, dataDir, reason: loaded.reason, message: loaded.message }),
+    };
+  }
+  const { vocabulary, preference } = loaded;
+  const key = themeElectionKey(dataDir, question);
+  const pending = clarificationAnswer ? pendingThemeElectionCache.get(key) : undefined;
+  if (pending) {
+    const choice = themeChoice(clarificationAnswer, vocabulary);
+    if (choice.state !== 'selected') {
+      return {
+        state: 'response',
+        response: themeClarificationResponse({
+          question,
+          dataDir,
+          vocabulary,
+          reason: pending.reason,
+          purpose: pending.purpose,
+        }),
+      };
+    }
+    const saved = await setThemePreference({ cli, dataDir, vocabulary, value: choice.value, remainingMs });
+    if (!saved.ok) {
+      return {
+        state: 'response',
+        response: themeBlockedResponse({ question, dataDir, reason: saved.reason, message: saved.message }),
+      };
+    }
+    pendingThemeElectionCache.delete(key);
+    if (pending.purpose === 'preference_only') {
+      return { state: 'response', response: themePreferenceUpdatedResponse({ question, dataDir, value: choice.value }) };
+    }
+    return { state: 'proceed', question, theme: choice.value, clarificationConsumed: true };
+  }
+
+  if (explicitTheme !== undefined && explicitTheme !== null) {
+    const choice = themeChoice(explicitTheme, vocabulary, { structured: true });
+    if (choice.state !== 'selected') {
+      throw new Error('theme must match a value returned by density theme list, or a six-digit hex brand accent.');
+    }
+    pendingThemeElectionCache.delete(key);
+    return { state: 'proceed', question, theme: choice.value, clarificationConsumed: false };
+  }
+
+  const availability = themeAvailabilityIntent(question);
+  const change = themeChangeIntent(question);
+  const embedded = embeddedThemeRequest(question, vocabulary);
+  if (embedded.state === 'ambiguous' || (embedded.matched && embedded.state === 'invalid')) {
+    return {
+      state: 'response',
+      response: themeClarificationResponse({
+        question,
+        dataDir,
+        vocabulary,
+        reason: embedded.state === 'ambiguous' ? 'analytic_theme_ambiguous' : 'analytic_theme_selection_required',
+      }),
+    };
+  }
+  if ((availability || change) && embedded.state !== 'selected') {
+    return {
+      state: 'response',
+      response: themeClarificationResponse({
+        question,
+        dataDir,
+        vocabulary,
+        reason: 'analytic_theme_change_requested',
+        purpose: 'preference_only',
+      }),
+    };
+  }
+  if (embedded.state === 'selected') {
+    const saved = await setThemePreference({ cli, dataDir, vocabulary, value: embedded.value, remainingMs });
+    if (!saved.ok) {
+      return {
+        state: 'response',
+        response: themeBlockedResponse({ question, dataDir, reason: saved.reason, message: saved.message }),
+      };
+    }
+    pendingThemeElectionCache.delete(key);
+    if (change && isThemeOnlyQuestion(embedded.rewritten)) {
+      return { state: 'response', response: themePreferenceUpdatedResponse({ question, dataDir, value: embedded.value }) };
+    }
+    if (isThemeOnlyQuestion(embedded.rewritten)) {
+      if (!priorChart?.question) {
+        return { state: 'response', response: themeFollowUpNeedsQuestion({ question, dataDir }) };
+      }
+      return {
+        state: 'proceed',
+        question: priorChart.question,
+        theme: embedded.value,
+        clarificationConsumed: false,
+        followUp: {
+          type: 'theme_only_rerender',
+          previousQuestion: priorChart.question,
+          effectiveQuestion: priorChart.question,
+          reason: 'The request changed only the theme, so the plugin reused the prior analytic question.',
+        },
+      };
+    }
+    return {
+      state: 'proceed',
+      question: embedded.rewritten,
+      theme: embedded.value,
+      clarificationConsumed: false,
+      followUp: embedded.rewritten !== question
+        ? {
+            type: 'rewrite_theme_reference',
+            effectiveQuestion: embedded.rewritten,
+            reason: 'The plugin removed the theme phrase before scope matching and applied the selected theme separately.',
+          }
+        : undefined,
+    };
+  }
+  if (!preference.selected) {
+    return {
+      state: 'response',
+      response: themeClarificationResponse({
+        question,
+        dataDir,
+        vocabulary,
+        reason: 'analytic_theme_selection_required',
+      }),
+    };
+  }
+  return { state: 'proceed', question, clarificationConsumed: false };
 };
 
 const validatedQuestionUiSource = (answerProps) => {
@@ -737,6 +1250,7 @@ const parseQuestionUiAnswer = async ({
       freshness: answerProps.freshness ?? state.freshness,
     }),
     question,
+    scopeResolution: answerProps.scopeResolution ?? state.scopeResolution,
     title: answerProps.title ?? '',
     subtitle: answerProps.subtitle ?? '',
     chart: svg,
@@ -820,6 +1334,7 @@ const cachedQuestionUiIsUsable = async (result) => {
     const state = ui.jsonRender?.spec?.state ?? {};
     const svg = ui.artifacts?.svg ?? state.artifacts?.svg;
     const html = ui.artifacts?.html ?? state.artifacts?.html;
+    if (ui.cache?.type === 'prepared_metrics' && !svg && !html) return true;
     const svgSha256 = ui.artifacts?.svgSha256 ?? state.artifacts?.svgSha256;
     const htmlSha256 = ui.artifacts?.htmlSha256 ?? state.artifacts?.htmlSha256;
     const [svgUsable, htmlUsable] = await Promise.all([
@@ -2507,7 +3022,6 @@ const normalizeAnalyticPayload = async ({
 export async function analyticSlide(args = {}) {
   const question = analyticSlideQuestion(args.question);
   const dataDir = analyticSlideDataDir(args.dataDir);
-  const theme = resolveTheme(args.theme);
   const deadline = createHistoricalQuestionDeadline(args.timeoutMs ?? 30000);
   const base = { question, dataDir, requestedMode: 'slide' };
   const timedOutResponse = () => ({
@@ -2549,9 +3063,33 @@ export async function analyticSlide(args = {}) {
       message: 'This Density CLI does not support validated analytic slide artifacts yet.',
     };
   }
+  const themeRequest = await prepareAnalyticThemeRequest({
+    question,
+    dataDir,
+    cli,
+    capabilities,
+    remainingMs: deadline.remainingMs,
+    explicitTheme: args.theme,
+    priorChart: readChartContext(dataDir),
+  });
+  if (themeRequest.state === 'response') {
+    const response = themeRequest.response;
+    const clarification = Boolean(response.clarificationRequest);
+    return {
+      ...base,
+      ...response,
+      deliveredMode: clarification ? 'clarification' : 'none',
+      validationState: clarification ? 'clarification_required' : response.ok ? 'preference_updated' : 'unavailable',
+      analyticState: clarification ? 'clarification_required' : response.ok ? 'preference_updated' : 'unavailable',
+      cli: safeCliInfo(cli),
+      capabilities,
+    };
+  }
+  const renderQuestion = themeRequest.question;
+  const theme = themeRequest.theme;
   remainingMs = deadline.remainingMs();
   if (remainingMs <= 0) return timedOutResponse();
-  const result = await runDensity(cli, ['question', question, '--slide', ...(theme === undefined ? [] : ['--theme', theme]), '--format', 'ui'], {
+  const result = await runDensity(cli, ['question', renderQuestion, '--slide', ...(theme === undefined ? [] : ['--theme', theme]), '--format', 'ui'], {
     dataDir,
     allowFailure: true,
     timeoutMs: remainingMs,
@@ -2597,7 +3135,7 @@ export async function analyticSlide(args = {}) {
     analytic: ui.analytic,
     panelTarget: ui.panelTarget,
     runtimeArtifact: isRecord(ui.artifact) ? ui.artifact : ui.artifacts,
-    question,
+    question: renderQuestion,
     requestedMode: 'slide',
     capabilities,
     required: true,
@@ -2606,6 +3144,7 @@ export async function analyticSlide(args = {}) {
   const { artifact } = normalized;
   const summary = {
     ...base,
+    ...(themeRequest.followUp ? { followUp: themeRequest.followUp } : {}),
     headline: artifact.headline,
     subtitle: artifact.subtitle,
     confidence: artifact.confidence,
@@ -2646,7 +3185,7 @@ export async function analyticSlide(args = {}) {
         : 'The validated analytic result is blocked and did not produce a slide.',
     };
   }
-  return {
+  const response = {
     ...summary,
     ok: true,
     deliveredMode: 'none',
@@ -2656,6 +3195,8 @@ export async function analyticSlide(args = {}) {
     ...(normalized.companionPaths ?? {}),
     ...(normalized.evidenceReceipt ? { evidenceReceipt: normalized.evidenceReceipt } : {}),
   };
+  rememberChartContext(dataDir, { ...response, question: renderQuestion });
+  return response;
 }
 
 export const ANALYTIC_LEARNING_LABELS = Object.freeze([
@@ -2906,7 +3447,6 @@ export async function floorUsageReport(args = {}) {
 export async function localUtilizationQuery(args = {}) {
   const question = String(args.question || '').trim();
   const presentation = resolvePresentation(args.presentation, 'slide');
-  const theme = resolveTheme(args.theme);
   const dataDir = resolveDataDir(args.dataDir);
   const priorChart = readChartContext(dataDir);
   const chartFollowUp = isChartFollowUpQuestion(question) ? priorChart : undefined;
@@ -2927,6 +3467,13 @@ export async function localUtilizationQuery(args = {}) {
         intent: 'sensor_health',
         reason: 'Question asked about sensor or live signal health, which is cloud-only.',
       },
+    };
+  }
+  if (sensorSubjectIntent(question) && !historicalSensorUtilizationIntent(question)) {
+    return {
+      ...unsupportedSensorQuestionResponse(question),
+      tool: 'local_utilization_query',
+      intent: 'unsupported_sensor_question',
     };
   }
   if (currentAvailabilityIntent(question) && !metadataIntent && !contextualFollowUp && !chartFollowUp) {
@@ -3016,25 +3563,6 @@ export async function localUtilizationQuery(args = {}) {
       },
     };
   }
-  const effectiveQuestion = chartFollowUp?.question
-    ?? (contextualFollowUp?.question
-    ? rewriteContextualQuestion(question, contextualFollowUp)
-    : question);
-  const followUp = chartFollowUp?.question
-    ? {
-        type: 'reuse_previous_chart',
-        previousQuestion: chartFollowUp.question,
-        effectiveQuestion,
-        reason: 'The question asked to show the previous answer as a chart, so the plugin reused the prior analytic question and reattached its canonical slide.',
-      }
-    : contextualFollowUp?.question
-      ? {
-          type: 'rewrite_contextual_question',
-          previousQuestion: contextualFollowUp.question,
-          effectiveQuestion,
-          reason: 'The question depended on the previous analytics answer, so the plugin preserved the prior scope and metric context before calling the CLI.',
-        }
-      : undefined;
   const deadline = createHistoricalQuestionDeadline(args.timeoutMs);
   const remainingWallMs = deadline.remainingMs;
   const timedOutResponse = () => historicalQuestionTimedOut({
@@ -3050,6 +3578,70 @@ export async function localUtilizationQuery(args = {}) {
     if (capabilityRemainingMs <= 0) return timedOutResponse();
     analyticCapabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs: capabilityRemainingMs });
   }
+  let routedQuestion = question;
+  let theme;
+  let themeFollowUp;
+  let clarificationConsumed = false;
+  if (presentation === 'slide' || args.includeAnalyticArtifact === true) {
+    const themeRequest = await prepareAnalyticThemeRequest({
+      question,
+      dataDir,
+      cli,
+      capabilities: analyticCapabilities,
+      remainingMs: remainingWallMs,
+      explicitTheme: args.theme,
+      clarificationAnswer: String(args.clarificationAnswer || '').trim(),
+      priorChart,
+    });
+    if (themeRequest.state === 'response') {
+      const response = {
+        ...themeRequest.response,
+        capabilities: analyticCapabilities,
+        cli: safeCliInfo(cli),
+        tool: 'local_utilization_query',
+      };
+      return {
+        ...response,
+        presentationDelivery: presentationDelivery({
+          requested: 'slide',
+          slideSupported: supportsAnalyticArtifact(analyticCapabilities, 'slide'),
+          response,
+        }),
+      };
+    }
+    routedQuestion = themeRequest.question;
+    theme = themeRequest.theme;
+    themeFollowUp = themeRequest.followUp;
+    clarificationConsumed = themeRequest.clarificationConsumed;
+  }
+  const clarificationAnswer = String(args.clarificationAnswer || '').trim();
+  if (clarificationAnswer && !clarificationConsumed) {
+    routedQuestion = `${routedQuestion} User clarification: ${clarificationAnswer}`;
+  }
+  const routedChartFollowUp = themeFollowUp ? undefined : (isChartFollowUpQuestion(routedQuestion) ? priorChart : undefined);
+  const routedContextualFollowUp = themeFollowUp ? undefined : (isContextualAnalyticsFollowUp(routedQuestion) ? priorChart : undefined);
+  const effectiveQuestion = themeFollowUp?.effectiveQuestion
+    ?? routedChartFollowUp?.question
+    ?? (routedContextualFollowUp?.question
+      ? rewriteContextualQuestion(routedQuestion, routedContextualFollowUp)
+      : routedQuestion);
+  const operatingHours = requestedOperatingHours(effectiveQuestion);
+  const followUp = themeFollowUp
+    ?? (routedChartFollowUp?.question
+      ? {
+          type: 'reuse_previous_chart',
+          previousQuestion: routedChartFollowUp.question,
+          effectiveQuestion,
+          reason: 'The question asked to show the previous answer as a chart, so the plugin reused the prior analytic question and reattached its canonical slide.',
+        }
+      : routedContextualFollowUp?.question
+        ? {
+            type: 'rewrite_contextual_question',
+            previousQuestion: routedContextualFollowUp.question,
+            effectiveQuestion,
+            reason: 'The question depended on the previous analytics answer, so the plugin preserved the prior scope and metric context before calling the CLI.',
+          }
+        : undefined);
   const initialRemainingMs = remainingWallMs();
   if (initialRemainingMs <= 0) return timedOutResponse();
   const analyticArtifactSupported = supportsAnalyticArtifact(analyticCapabilities);
@@ -3088,6 +3680,8 @@ export async function localUtilizationQuery(args = {}) {
       includePanelTarget: useAnalyticSlide,
     });
     if (remainingWallMs() <= 0) return timedOutResponse();
+    const operatingHoursMismatch = operatingHours
+      && !operatingHoursMatch(response.effectiveScope?.operatingHours, operatingHours);
     const responseWithRouting = {
       ...response,
       ...(analyticCapabilities ? { capabilities: analyticCapabilities } : {}),
@@ -3096,6 +3690,12 @@ export async function localUtilizationQuery(args = {}) {
       routedTool: metadataRouting?.routedTool ?? response.routedTool,
       routing: metadataRouting ?? response.routing,
       followUp,
+      ...(operatingHoursMismatch ? {
+        caveats: [
+          ...(Array.isArray(response.caveats) ? response.caveats : []),
+          `Requested operating hours ${operatingHours.label}, but the CLI reported ${response.effectiveScope?.operatingHours?.label ?? 'no operating-hours window'}; the requested window was not silently substituted.`,
+        ],
+      } : {}),
       benchmarkAffordance: response.ok === false || metadataIntent
         ? undefined
         : {
@@ -3168,17 +3768,19 @@ export async function answerDensityQuestion(args = {}) {
   const question = String(args.question || '').trim();
   if (!question) throw new Error('question is required.');
   const clarificationAnswer = String(args.clarificationAnswer || '').trim();
-  const effectiveQuestion = clarificationAnswer
-    ? `${question} User clarification: ${clarificationAnswer}`
-    : question;
   const presentation = resolvePresentation(args.presentation, 'slide');
   const response = await localUtilizationQuery({
     ...args,
-    question: effectiveQuestion,
+    question,
+    clarificationAnswer,
     presentation,
     includeAnalyticArtifact: presentation === 'slide',
   });
-  const responseWithReadiness = response.intent === 'sensor_health' || response.ui || response.timedOut || response.blocked
+  const responseWithReadiness = response.intent === 'sensor_health'
+    || response.intent?.startsWith('analytic_theme_')
+    || response.ui
+    || response.timedOut
+    || response.blocked
     ? response
     : await attachBuildingReadiness(response, args);
   const routedTool = response.routedTool ?? 'local_utilization_query';
@@ -3405,6 +4007,22 @@ const normalizedScopeName = (value) => String(value ?? '')
 
 const SENSOR_STATUS_PREPOSITIONAL_PHRASE = /\b(?:in|at)\s+(?:(?:an?|the)\s+)?(?:errors?(?:\s+(?:state|status|condition))?|(?:good|bad|poor)\s+health|healthy|unhealthy|online|offline|unconfigured|stale|(?:in\s+)?need(?:ing)?\s+(?:of\s+)?attention|risk)(?=\b)/gi;
 
+const unsupportedSensorQuestionResponse = (question, contract = {
+  source: 'density_cloud_only',
+  noLocalDuckdbFallback: true,
+  rawStatusPreserved: true,
+}) => ({
+  ok: false,
+  unsupported: true,
+  question,
+  sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
+  sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
+  sourceLabel: 'Density Sensor Health',
+  contract,
+  message: 'This question is outside the supported sensor health or status vocabulary. No substitute sensor question was run.',
+  userVisiblePrimaryActions: 0,
+});
+
 const requestedNamedScope = (question) => {
   const text = String(question ?? '').replace(SENSOR_STATUS_PREPOSITIONAL_PHRASE, '');
   const namedMatch = text.match(/\b(?:in|at)\s+(?:the\s+)?(.+?)(?=\s+(?:are|is|has|have|with)\b|[?!,.]|$)/i);
@@ -3615,6 +4233,7 @@ export async function sensorHealthReport(args = {}) {
   }
 
   const question = String(args.question || '').trim();
+  if (!sensorHealthIntent(question)) return unsupportedSensorQuestionResponse(question, contract);
   if (requestsHistoricalSensorSnapshot(question)) {
     return {
       ok: false,

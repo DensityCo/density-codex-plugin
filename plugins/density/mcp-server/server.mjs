@@ -104,7 +104,7 @@ const tools = [
     },
     additionalProperties: false,
   }),
-  tool('answer_density_question', 'Default front door for ordinary Density questions. Pass the user question verbatim. Do not add metrics, freshness checks, time windows, operating hours, exclusions, or other requirements the user did not state. Use before narrower tools, especially for broad prompts like "pick any building" or "compare any one site"; routes internally through historical, live wayfinding, floorplan, data health, or sensor health surfaces. Treat orchestration.terminal as final for the current turn: deliver complete results immediately, or ask exactly one question and wait when awaitingUser is true. Do not retry with another Density tool. Do not use shell, DuckDB, SQL, manual CLI commands, or hand-built chart scripts for ordinary questions.', {
+  tool('answer_density_question', 'Default front door for ordinary Density questions. Pass the user question verbatim. Do not add metrics, freshness checks, time windows, operating hours, exclusions, or other requirements the user did not state. Use before narrower tools, especially for broad delegated-scope prompts; routes internally through historical, live wayfinding, floorplan, data health, or sensor health surfaces. Treat orchestration.terminal as final for the current turn: deliver complete results immediately, or ask exactly one question and wait when awaitingUser is true. Do not retry with another Density tool. Do not use shell, DuckDB, SQL, manual CLI commands, or hand-built chart scripts for ordinary questions.', {
     type: 'object',
     properties: {
       question: { type: 'string' },
@@ -161,12 +161,13 @@ const tools = [
     required: ['id'],
     additionalProperties: false,
   }),
-  tool('local_utilization_query', 'Use for historical utilization, trends, rankings, busiest/least-used spaces, and local customer-owned analytics when the scope is already clear. For broad "any building/site" prompts, use answer_density_question first. Do not use for live availability, sensor health, benchmark peer context, shell, DuckDB, SQL, or manual Parquet fallbacks.', {
+  tool('local_utilization_query', 'Use for historical utilization, trends, rankings, busiest/least-used spaces, and local customer-owned analytics when the scope is already clear. For broad delegated-scope prompts, use answer_density_question first. Do not use for live availability, sensor health, benchmark peer context, shell, DuckDB, SQL, or manual Parquet fallbacks.', {
     type: 'object',
     properties: {
       question: { type: 'string' },
       dataDir: { type: 'string' },
       presentation: { type: 'string', enum: ['slide', 'broadsheet'], description: 'Defaults to the validated fixed slide. Use broadsheet for the classic editorial chart variant.' },
+      theme: { type: 'string', description: 'Optional one-render theme override: a runtime-listed theme id, preset, or #hex brand accent.' },
     },
     required: ['question'],
     additionalProperties: false,
@@ -232,10 +233,6 @@ const tools = [
       question: { type: 'string' },
       dataDir: { type: 'string' },
       timeoutMs: { type: 'number', minimum: 1 },
-      organizationId: { type: 'string' },
-      buildingId: { type: 'string' },
-      floorId: { type: 'string' },
-      spaceIds: { type: 'array', items: { type: 'string' } },
     },
     additionalProperties: false,
   }),
@@ -521,10 +518,19 @@ const compactClarification = (value) => {
     question: clarification.question ?? value.question,
     prompt: clarification.prompt ?? value.prompt ?? value.message,
     requiredChoiceCount: clarification.requiredChoiceCount ?? 1,
-    suggestions: Array.isArray(clarification.suggestions) ? clarification.suggestions.slice(0, 8) : [],
-    candidates: Array.isArray(clarification.candidates) ? clarification.candidates.slice(0, 8) : undefined,
+    suggestions: Array.isArray(clarification.suggestions) ? clarification.suggestions.slice(0, 16) : [],
+    candidates: Array.isArray(clarification.candidates) ? clarification.candidates.slice(0, 16) : undefined,
     freeform: clarification.freeform,
     responseSemantics: clarification.responseSemantics,
+  };
+};
+
+const compactFollowUp = (value) => {
+  const followUp = value?.followUp;
+  if (typeof followUp?.effectiveQuestion !== 'string' || typeof followUp?.reason !== 'string') return undefined;
+  return {
+    effectiveQuestion: followUp.effectiveQuestion,
+    reason: followUp.reason,
   };
 };
 
@@ -564,6 +570,7 @@ const compactQuestionResult = (value) => {
     intent: value?.intent,
     routedTool: value?.routedTool,
     routing: value?.routing,
+    followUp: compactFollowUp(value),
     sourceLayer: value?.sourceLayer,
     sourceBadge: value?.sourceBadge,
     provenance: value?.provenance,
@@ -617,6 +624,7 @@ const compactSlideResult = (value, slideDelivery) => {
     intent: value.intent,
     routedTool: value.routedTool,
     routing: value.routing,
+    followUp: compactFollowUp(value),
     sourceLayer: value.sourceLayer,
     sourceBadge: value.sourceBadge,
     provenance: value.provenance,

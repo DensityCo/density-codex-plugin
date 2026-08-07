@@ -37,13 +37,13 @@ is part of the answer — real visual evidence, never a decorated text answer.
 
 ## Theme registry
 
-Pass `theme` on `answer_density_question` or `analytic_slide`. Omit it for
-the canonical Broadsheet look. Never invent theme values; the full token sets
-live in the CLI's theme registry and are not yours to restyle.
+Pass `theme` on `answer_density_question` or `analytic_slide`. When no theme is
+selected, non-interactive and headless rendering falls back to `product_clean`.
+Never invent theme values; the full token sets live in the CLI's theme registry
+and are not yours to restyle.
 
 | id | look | page | accent |
 |---|---|---|---|
-| `institutional` | corporate navy on white | #FFFFFF | #1F4E9C |
 | `product_clean` | SaaS violet on near-white | #FAFBFC | #635BFF |
 | `editorial` | serif greens on warm cream | #FBF7EE | #446B4C |
 | `swiss` | Helvetica red/black, top rule | #FFFFFF | #D93025 |
@@ -62,7 +62,7 @@ arrives, the sketch state previews an uploaded brand with dashed slots and
 skeleton bars; it is scaffolding, never evidence.
 
 Pick a theme by audience (customer deck → their brand accent or the closest
-named theme; internal review → default Broadsheet). Keep one theme per deck.
+named theme; internal review → `product_clean`). Keep one theme per deck.
 
 ## Chart families
 

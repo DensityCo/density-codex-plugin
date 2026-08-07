@@ -303,7 +303,7 @@ test('MCP tools/list exposes the default Density front door and routing guidance
   assert.match(frontDoor.description, /DuckDB/i);
   assert.match(frontDoor.description, /SQL/i);
   assert.match(frontDoor.description, /manual CLI/i);
-  assert.match(frontDoor.description, /pick any building/i);
+  assert.match(frontDoor.description, /broad delegated-scope prompts/i);
   assert.match(frontDoor.description, /hand-built chart scripts/i);
   assert.deepEqual(frontDoor.inputSchema.required, ['question']);
   assert.equal(frontDoor.inputSchema.properties.question.type, 'string');
@@ -365,9 +365,11 @@ test('MCP tools/list exposes the default Density front door and routing guidance
     assert.match(byName.get(name).description, /^Use for/i, `${name} should start with explicit Use-for routing language`);
   }
   const sensorHealth = byName.get('sensor_health_report');
+  assert.doesNotMatch(sensorHealth.description, /["'](?:pick|choose|select) any/i);
   assert.equal(sensorHealth.inputSchema.properties.question.type, 'string');
   assert.equal(sensorHealth.inputSchema.properties.dataDir.type, 'string');
   assert.equal(sensorHealth.inputSchema.properties.timeoutMs.type, 'number');
+  assert.deepEqual(Object.keys(sensorHealth.inputSchema.properties).sort(), ['dataDir', 'question', 'timeoutMs']);
   assert.equal(sensorHealth.inputSchema.required, undefined);
 });
 
@@ -409,6 +411,7 @@ const withTempEnv = async (fn) => {
     FAKE_ANALYTIC_NO_SLIDE: process.env.FAKE_ANALYTIC_NO_SLIDE,
     FAKE_QUESTION_UI_ARTIFACT_FREE: process.env.FAKE_QUESTION_UI_ARTIFACT_FREE,
     FAKE_QUESTION_UI_ARTIFACT_STATE: process.env.FAKE_QUESTION_UI_ARTIFACT_STATE,
+    FAKE_QUESTION_UI_PREPARED_CACHE: process.env.FAKE_QUESTION_UI_PREPARED_CACHE,
     FAKE_QUESTION_CACHE_MISS: process.env.FAKE_QUESTION_CACHE_MISS,
     FAKE_QUESTION_NO_SCOPE: process.env.FAKE_QUESTION_NO_SCOPE,
     FAKE_QUESTION_MIXED: process.env.FAKE_QUESTION_MIXED,
@@ -445,7 +448,13 @@ const withTempEnv = async (fn) => {
     FAKE_SENSOR_PRIVATE_UI: process.env.FAKE_SENSOR_PRIVATE_UI,
     FAKE_SENSOR_INVALID_CONTRACT: process.env.FAKE_SENSOR_INVALID_CONTRACT,
     FAKE_SENSOR_SCOPE_LABEL: process.env.FAKE_SENSOR_SCOPE_LABEL,
+    FAKE_OPERATING_HOURS: process.env.FAKE_OPERATING_HOURS,
     FAKE_CAPABILITIES_FAIL: process.env.FAKE_CAPABILITIES_FAIL,
+    FAKE_THEME_CAPABILITY: process.env.FAKE_THEME_CAPABILITY,
+    FAKE_THEME_UNSET: process.env.FAKE_THEME_UNSET,
+    FAKE_THEME_LIST_MALFORMED: process.env.FAKE_THEME_LIST_MALFORMED,
+    FAKE_THEME_GET_MALFORMED: process.env.FAKE_THEME_GET_MALFORMED,
+    FAKE_THEME_SET_FAIL: process.env.FAKE_THEME_SET_FAIL,
     FAKE_AUTH_OK: process.env.FAKE_AUTH_OK,
     FAKE_DELAY_METRICS: process.env.FAKE_DELAY_METRICS,
     FAKE_WAYFINDING_HELP: process.env.FAKE_WAYFINDING_HELP,
@@ -475,7 +484,7 @@ const writeFakeCli = async (file) => {
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, `#!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 const args = process.argv.slice(2);
 const starterRows = process.env.FAKE_ZERO_STARTER === '1' ? 0 : 2;
@@ -491,6 +500,38 @@ const canonicalJson = (value) => {
   return JSON.stringify(value) ?? 'null';
 };
 const analyticSha256 = (value) => createHash('sha256').update(canonicalJson(value)).digest('hex');
+const themeRegistry = [
+  { value: 'product_clean', label: 'Product Clean' },
+  { value: 'editorial', label: 'Editorial' },
+  { value: 'swiss', label: 'Swiss' },
+  { value: 'boardroom_dark', label: 'Boardroom Dark' },
+  { value: 'ft_editorial', label: 'FT Editorial' },
+  { value: 'monograph', label: 'Monograph' },
+  { value: 'blueprint', label: 'Blueprint' },
+  { value: 'humanist', label: 'Humanist' },
+  { value: 'newsprint_mono', label: 'Newsprint Mono' },
+  { value: 'alpine_grid', label: 'Alpine Grid' }
+];
+const themePresets = [
+  { value: 'density_blue', accent: '#1F4E9C' },
+  { value: 'indigo', accent: '#635BFF' },
+  { value: 'deep_teal', accent: '#1A6B54' }
+];
+const themeStateFile = path.join(process.env.DENSITY_CLI_DATA_DIR || '/tmp', 'fake-theme-preference.json');
+const themeSelection = (value) => {
+  if (/^#[0-9a-fA-F]{6}$/.test(value)) return { brand_accent: value };
+  if (themePresets.some((entry) => entry.value === value)) return { preset: value };
+  if (themeRegistry.some((entry) => entry.value === value)) return { theme: value };
+  return undefined;
+};
+const readThemeValue = async () => {
+  try {
+    return JSON.parse(await readFile(themeStateFile, 'utf8')).value;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    return process.env.FAKE_THEME_UNSET === '1' ? null : 'product_clean';
+  }
+};
 if (args[0] === 'capabilities') {
   if (Number(process.env.FAKE_CAPABILITY_DELAY_MS) > 0) {
     await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_CAPABILITY_DELAY_MS)));
@@ -547,11 +588,51 @@ if (args[0] === 'capabilities') {
       questionStarter: process.env.FAKE_STARTER_SUPPORT === '1',
       questionSensorHealth: process.env.FAKE_SENSOR_HEALTH_UI === '1',
       questionSnapshotRefresh: process.env.FAKE_SNAPSHOT_REFRESH_SUPPORT !== '0',
+      analyticThemePreference: process.env.FAKE_THEME_CAPABILITY !== '0',
       repairFastQuestions: true,
       vizHtml: true
     },
     htmlReports: ['building-overview', 'meeting-rooms', 'floor-usage']
   });
+} else if (args[0] === 'theme' && args[1] === 'list') {
+  if (process.env.FAKE_THEME_LIST_MALFORMED === '1') {
+    out({ kind: 'density.analytic-theme-selections.v0', registry: themeRegistry });
+  } else {
+    out({
+      kind: 'density.analytic-theme-selections.v1',
+      registry: themeRegistry,
+      presets: themePresets,
+      customBrandAccent: { format: '#RRGGBB' }
+    });
+  }
+} else if (args[0] === 'theme' && args[1] === 'get') {
+  if (process.env.FAKE_THEME_GET_MALFORMED === '1') {
+    out({ kind: 'density.analytic-theme-preference.v1', selected: true, selection: { theme: 'unknown' }, value: 'unknown' });
+  } else {
+    const value = await readThemeValue();
+    out({
+      kind: 'density.analytic-theme-preference.v1',
+      selected: value !== null,
+      selection: value === null ? null : themeSelection(value),
+      value
+    });
+  }
+} else if (args[0] === 'theme' && args[1] === 'set') {
+  if (process.env.FAKE_THEME_SET_FAIL === '1') {
+    console.error('theme set failed');
+    process.exitCode = 1;
+  } else {
+    const value = String(args[2] || '');
+    const selection = themeSelection(value);
+    if (!selection) {
+      console.error('unknown theme');
+      process.exitCode = 1;
+    } else {
+      await mkdir(path.dirname(themeStateFile), { recursive: true });
+      await writeFile(themeStateFile, JSON.stringify({ value }));
+      out({ kind: 'density.analytic-theme-preference.v1', selected: true, selection, value });
+    }
+  }
 } else if (args[0] === 'available-buildings') {
   if (process.env.FAKE_AVAILABLE_BUILDINGS_SUPPORT === '0') {
     console.error('available-buildings unsupported');
@@ -1097,8 +1178,9 @@ if (args[0] === 'capabilities') {
           elements: {
             answer: {
               props: {
-                title: noScope ? 'No matching local scope found' : (metadataAnswer?.title ?? (cacheHit ? 'Busiest rooms cached UI' : 'Busiest rooms UI')),
-                subtitle: noScope ? 'The question named a building or floor that was not found in local Atlas metadata, so the answer should not be treated as scoped.' : (metadataAnswer?.subtitle ?? (cacheHit ? 'Local fake cached UI data' : 'Local fake UI data')),
+                title: noScope ? 'Requested place is unavailable' : (metadataAnswer?.title ?? (cacheHit ? 'Busiest rooms cached UI' : 'Busiest rooms UI')),
+                subtitle: noScope ? 'Choose another place before continuing.' : (metadataAnswer?.subtitle ?? (cacheHit ? 'Local fake cached UI data' : 'Local fake UI data')),
+                ...(noScope ? { scopeResolution: 'no_match' } : {}),
                 ...(mixedBenchmark ? {
                   sourceBadge: 'Mixed',
                   sourceLayer: 'mixed_local_benchmark',
@@ -1122,7 +1204,9 @@ if (args[0] === 'capabilities') {
             rows: metadataAnswer?.rows,
             effectiveScope: {
               timezone: { value: 'America/New_York', source: 'space_metadata', fallbackUsed: false },
-              operatingHours: { start: 8, end: 18, label: '8am-6pm', source: 'atlas_default' },
+              operatingHours: process.env.FAKE_OPERATING_HOURS
+                ? JSON.parse(process.env.FAKE_OPERATING_HOURS)
+                : { start: 8, end: 18, label: '8am-6pm', source: 'atlas_default' },
               sourceViews: ['atlas_local_metrics', 'atlas_spaces_flat']
             },
             freshness: { firstLocalDay: '2000-01-01', lastLocalDay: '2000-01-02', source: 'atlas_local_metrics' },
@@ -1144,7 +1228,11 @@ if (args[0] === 'capabilities') {
           url: 'file://' + (process.env.FAKE_ANALYTIC_BAD_TARGET === '1' ? '/tmp/a-different-slide.html' : analytic.slideFile)
         }
       } : {}),
-      cache: cacheHit ? { hit: true, manifest: '/tmp/starter-manifest.json' } : undefined,
+      cache: cacheHit
+        ? process.env.FAKE_QUESTION_UI_PREPARED_CACHE === '1'
+          ? { hit: true, type: 'prepared_metrics', fingerprint: 'prepared-fixture' }
+          : { hit: true, manifest: '/tmp/starter-manifest.json' }
+        : undefined,
       ...(process.env.FAKE_QUESTION_SNAPSHOT === '1' ? {
         snapshot: {
           contract: 'density.local-question-snapshot.v1',
@@ -2002,7 +2090,7 @@ test('answerDensityQuestion preserves the old result shape and flags without ana
   });
 });
 
-test('answerDensityQuestion retries a failed default-slide capability probe and preserves chart fallback metadata', async () => {
+test('answerDensityQuestion fails closed on a failed theme capability probe and retries discovery', async () => {
   await withTempEnv(async (tempDir) => {
     const fakeCli = path.join(tempDir, 'density.mjs');
     const logFile = path.join(tempDir, 'calls.log');
@@ -2018,14 +2106,9 @@ test('answerDensityQuestion retries a failed default-slide capability probe and 
       question: 'what are the busiest rooms?',
       dataDir,
     });
-    const fallbackQuestion = (await readFakeLog(logFile)).find((args) => args[0] === 'question');
-    assert.equal(fallbackQuestion.includes('--chart'), true);
-    assert.deepEqual(fallback.presentationDelivery, {
-      requested: 'slide',
-      delivered: 'chart',
-      slideSupported: false,
-      reason: 'The installed Density runtime does not advertise validated slide support.',
-    });
+    assert.equal((await readFakeLog(logFile)).some((args) => args[0] === 'question'), false);
+    assert.equal(fallback.ok, false);
+    assert.equal(fallback.reason, 'analytic_theme_preference_unsupported');
 
     delete process.env.FAKE_CAPABILITIES_FAIL;
     process.env.FAKE_ANALYTIC_SUPPORT = '1';
@@ -2682,6 +2765,76 @@ test('answer_density_question MCP delivery is compact and falls back honestly to
   });
 });
 
+test('answer_density_question compact ordinary results expose only the follow-up rewrite disclosure', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CHART_SUPPORT = '1';
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+    const dataDir = path.join(tempDir, 'ordinary-follow-up-data');
+
+    const [, result] = await callMcpRequests([
+      {
+        method: 'tools/call',
+        params: {
+          name: 'answer_density_question',
+          arguments: { question: 'what is the most popular conference room size in Metro Tower?', dataDir },
+        },
+      },
+      {
+        method: 'tools/call',
+        params: {
+          name: 'answer_density_question',
+          arguments: { question: 'what about phone booths?', dataDir },
+        },
+      },
+    ]);
+
+    assert.deepEqual(result.structuredContent.followUp, {
+      effectiveQuestion: 'what is the most popular phone booth size in Metro Tower?',
+      reason: 'The question depended on the previous analytics answer, so the plugin preserved the prior scope and metric context before calling the CLI.',
+    });
+  });
+});
+
+test('answer_density_question compact slide results expose only the follow-up rewrite disclosure', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const fakeBrowser = path.join(tempDir, 'fake-chrome');
+    await writeFakeCli(fakeCli);
+    await writeFakeHtmlScreenshotCommand(fakeBrowser);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.DENSITY_HTML_SCREENSHOT_COMMAND = fakeBrowser;
+    process.env.FAKE_CHART_SUPPORT = '1';
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+    process.env.FAKE_ANALYTIC_SUPPORT = '1';
+    const dataDir = path.join(tempDir, 'slide-follow-up-data');
+
+    const [, result] = await callMcpRequests([
+      {
+        method: 'tools/call',
+        params: {
+          name: 'answer_density_question',
+          arguments: { question: 'what is the most popular conference room size in Metro Tower?', dataDir },
+        },
+      },
+      {
+        method: 'tools/call',
+        params: {
+          name: 'answer_density_question',
+          arguments: { question: 'what about phone booths?', dataDir },
+        },
+      },
+    ]);
+
+    assert.deepEqual(result.structuredContent.followUp, {
+      effectiveQuestion: 'what is the most popular phone booth size in Metro Tower?',
+      reason: 'The question depended on the previous analytics answer, so the plugin preserved the prior scope and metric context before calling the CLI.',
+    });
+  });
+});
+
 test('answer_density_question MCP clarification is compact, terminal, and resumable', async () => {
   await withTempEnv(async (tempDir) => {
     const fakeCli = path.join(tempDir, 'density.mjs');
@@ -2824,18 +2977,278 @@ test('analytic_slide passes --theme through to the CLI question invocation', asy
 });
 
 test('theme arguments are validated before invoking the runtime', async () => {
-  await assert.rejects(
-    answerDensityQuestion({ question: 'busiest rooms', theme: 'neon_party' }),
-    /theme must be one of .*institutional.*density_blue.*hex brand accent/,
-  );
-  await assert.rejects(
-    analyticSlide({ question: 'busiest rooms', theme: '#12AB' }),
-    /theme must be one of/,
-  );
-  await assert.rejects(
-    localUtilizationQuery({ question: 'busiest rooms', theme: 'Density Blue' }),
-    /theme must be one of/,
-  );
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir);
+    const dataDir = path.join(tempDir, 'data');
+    for (const invoke of [
+      () => answerDensityQuestion({ question: 'busiest rooms', dataDir, theme: 'neon_party' }),
+      () => answerDensityQuestion({ question: 'busiest rooms', dataDir, theme: 'institutional' }),
+      () => analyticSlide({ question: 'busiest rooms', dataDir, theme: '#12AB' }),
+      () => localUtilizationQuery({ question: 'busiest rooms', dataDir, theme: 'Density Blue' }),
+    ]) {
+      await assert.rejects(invoke(), /theme must match a value returned by density theme list/);
+    }
+    assert.equal((await readFakeLog(logFile)).some((args) => args[0] === 'question'), false);
+  });
+});
+
+const prepareThemeRuntime = async (tempDir, { unset = false } = {}) => {
+  const fakeCli = path.join(tempDir, 'density.mjs');
+  const fakeBrowser = path.join(tempDir, 'fake-chrome');
+  const logFile = path.join(tempDir, 'theme-calls.log');
+  await writeFakeCli(fakeCli);
+  await writeFakeHtmlScreenshotCommand(fakeBrowser);
+  process.env.DENSITY_CLI_BIN = fakeCli;
+  process.env.DENSITY_HTML_SCREENSHOT_COMMAND = fakeBrowser;
+  process.env.FAKE_CLI_LOG = logFile;
+  process.env.FAKE_CHART_SUPPORT = '1';
+  process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+  process.env.FAKE_ANALYTIC_SUPPORT = '1';
+  if (unset) process.env.FAKE_THEME_UNSET = '1';
+  return { fakeCli, fakeBrowser, logFile };
+};
+
+test('all slide entry paths elect a CLI-derived theme before rendering on first use', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir, { unset: true });
+    const question = 'what are the busiest rooms?';
+    const results = await Promise.all([
+      answerDensityQuestion({ question, dataDir: path.join(tempDir, 'answer-data') }),
+      localUtilizationQuery({ question, dataDir: path.join(tempDir, 'local-data') }),
+      analyticSlide({ question, dataDir: path.join(tempDir, 'slide-data') }),
+    ]);
+
+    for (const result of results) {
+      assert.equal(result.ok, false);
+      assert.equal(result.clarificationRequest.kind, 'density.clarification_request.v1');
+      assert.equal(result.clarificationRequest.reason, 'analytic_theme_selection_required');
+      assert.equal(result.clarificationRequest.responseSemantics.writesArtifacts, false);
+      assert.equal(result.clarificationRequest.suggestions.some(({ id }) => id === 'alpine_grid'), true);
+      assert.equal(result.clarificationRequest.suggestions.some(({ id }) => id === 'institutional'), false);
+      assert.equal(result.clarificationRequest.freeform.format, '#RRGGBB');
+    }
+    const calls = await readFakeLog(logFile);
+    assert.equal(calls.filter((args) => args[0] === 'theme' && args[1] === 'list').length, 3);
+    assert.equal(calls.filter((args) => args[0] === 'theme' && args[1] === 'get').length, 3);
+    assert.equal(calls.some((args) => args[0] === 'question'), false);
+  });
+});
+
+test('theme election repeats invalid choices, persists a valid answer, and survives a plugin restart', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir, { unset: true });
+    const dataDir = path.join(tempDir, 'data');
+    const question = 'what are the busiest rooms?';
+
+    const first = await answerDensityQuestion({ question, dataDir });
+    assert.equal(first.clarificationRequest.reason, 'analytic_theme_selection_required');
+    const invalid = await answerDensityQuestion({ question, dataDir, clarificationAnswer: 'Neon Party' });
+    assert.equal(invalid.clarificationRequest.reason, 'analytic_theme_selection_required');
+    assert.equal((await readFakeLog(logFile)).some((args) => args[0] === 'question'), false);
+
+    const selected = await answerDensityQuestion({ question, dataDir, clarificationAnswer: 'Swiss' });
+    assert.equal(selected.ok, true);
+    let calls = await readFakeLog(logFile);
+    assert.equal(calls.filter((args) => args[0] === 'theme' && args[1] === 'set' && args[2] === 'swiss').length, 1);
+    const rendered = calls.filter((args) => args[0] === 'question');
+    assert.equal(rendered.length, 1);
+    assert.equal(rendered[0][1], question);
+    assert.equal(rendered[0][rendered[0].indexOf('--theme') + 1], 'swiss');
+
+    const restarted = await callMcp('tools/call', {
+      name: 'answer_density_question',
+      arguments: { question: 'what time are rooms busiest?', dataDir },
+    });
+    assert.equal(restarted.structuredContent.ok, true);
+    calls = await readFakeLog(logFile);
+    assert.equal(calls.filter((args) => args[0] === 'theme' && args[1] === 'set').length, 1);
+  });
+});
+
+test('a building clarification answer named Swiss is not consumed as a theme election', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir, { unset: true });
+    process.env.FAKE_QUESTION_CLARIFICATION = '1';
+    const dataDir = path.join(tempDir, 'data');
+    const question = 'compare utilization across a building';
+
+    await answerDensityQuestion({ question, dataDir });
+    const buildingPrompt = await answerDensityQuestion({ question, dataDir, clarificationAnswer: 'Editorial' });
+    assert.equal(buildingPrompt.clarificationRequest.reason, 'broad_scope_needs_resolution');
+    const buildingAnswer = await answerDensityQuestion({ question, dataDir, clarificationAnswer: 'Swiss' });
+    assert.equal(buildingAnswer.clarificationRequest.reason, 'broad_scope_needs_resolution');
+
+    const calls = await readFakeLog(logFile);
+    assert.equal(calls.filter((args) => args[0] === 'theme' && args[1] === 'set').length, 1);
+    assert.deepEqual(calls.filter((args) => args[0] === 'theme' && args[1] === 'set')[0].slice(0, 3), ['theme', 'set', 'editorial']);
+    assert.equal(calls.filter((args) => args[0] === 'question').at(-1)[1], `${question} User clarification: Swiss`);
+  });
+});
+
+test('embedded CLI-derived theme phrases are stripped before scope matching and persisted', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir, { unset: true });
+    const cases = [
+      ['rank the busiest rooms in boardroom_dark', 'rank the busiest rooms', 'boardroom_dark'],
+      ['rank the busiest rooms using the swiss theme', 'rank the busiest rooms', 'swiss'],
+      ['compare Swiss Tower using the board room dark theme', 'compare Swiss Tower', 'boardroom_dark'],
+      ['rank the busiest rooms using density_blue', 'rank the busiest rooms', 'density_blue'],
+      ['rank the busiest rooms using #1A6B54 theme', 'rank the busiest rooms', '#1A6B54'],
+      ['compare Board Room Dark Building using the Alpine Grid theme', 'compare Board Room Dark Building', 'alpine_grid'],
+      ['show rooms in Building A in boardroom_dark', 'show rooms in Building A', 'boardroom_dark'],
+    ];
+
+    for (const [question, effectiveQuestion, theme] of cases) {
+      const dataDir = path.join(tempDir, `data-${theme.replaceAll('#', '')}`);
+      const result = await answerDensityQuestion({ question, dataDir });
+      assert.equal(result.ok, true);
+      assert.equal(result.followUp.effectiveQuestion, effectiveQuestion);
+      assert.match(result.followUp.reason, /theme phrase/i);
+    }
+    const calls = await readFakeLog(logFile);
+    const questionCalls = calls.filter((args) => args[0] === 'question');
+    assert.deepEqual(questionCalls.map((args) => args[1]), cases.map(([, effectiveQuestion]) => effectiveQuestion));
+    assert.deepEqual(
+      calls.filter((args) => args[0] === 'theme' && args[1] === 'set').map((args) => args[2]),
+      cases.map(([, , theme]) => theme),
+    );
+  });
+});
+
+test('theme-only follow-ups rerender prior chart context and fail closed without it', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir);
+    const dataDir = path.join(tempDir, 'with-prior');
+    const question = 'what are the busiest rooms?';
+    await answerDensityQuestion({ question, dataDir });
+
+    const rerendered = await answerDensityQuestion({ question: 'do it in swiss', dataDir });
+    assert.equal(rerendered.ok, true);
+    assert.deepEqual(rerendered.followUp, {
+      type: 'theme_only_rerender',
+      previousQuestion: question,
+      effectiveQuestion: question,
+      reason: 'The request changed only the theme, so the plugin reused the prior analytic question.',
+    });
+    const noPriorDir = path.join(tempDir, 'without-prior');
+    const noPrior = await answerDensityQuestion({ question: 'do it in swiss', dataDir: noPriorDir });
+    assert.equal(noPrior.ok, false);
+    assert.equal(noPrior.clarificationRequest.reason, 'analytic_theme_follow_up_needs_question');
+
+    const calls = await readFakeLog(logFile);
+    const questionCalls = calls.filter((args) => args[0] === 'question');
+    assert.deepEqual(questionCalls.map((args) => args[1]), [question, question]);
+  });
+});
+
+test('theme availability and change requests use the chooser without rendering request text', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir);
+    const dataDir = path.join(tempDir, 'data');
+
+    const chooser = await answerDensityQuestion({ question: 'what themes are available?', dataDir });
+    assert.equal(chooser.clarificationRequest.reason, 'analytic_theme_change_requested');
+    assert.equal(chooser.clarificationRequest.suggestions.some(({ id }) => id === 'alpine_grid'), true);
+    const selected = await answerDensityQuestion({
+      question: 'what themes are available?',
+      clarificationAnswer: 'Alpine Grid',
+      dataDir,
+    });
+    assert.equal(selected.ok, true);
+    assert.equal(selected.intent, 'analytic_theme_preference_updated');
+
+    const changed = await answerDensityQuestion({ question: 'change the colors to Swiss', dataDir });
+    assert.equal(changed.ok, true);
+    assert.equal(changed.intent, 'analytic_theme_preference_updated');
+    const calls = await readFakeLog(logFile);
+    assert.deepEqual(
+      calls.filter((args) => args[0] === 'theme' && args[1] === 'set').map((args) => args[2]),
+      ['alpine_grid', 'swiss'],
+    );
+    assert.equal(calls.some((args) => args[0] === 'question'), false);
+  });
+});
+
+test('an explicit structured theme is a validated one-render override and does not persist', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir, { unset: true });
+    const dataDir = path.join(tempDir, 'data');
+    const question = 'what are the busiest rooms?';
+
+    const overridden = await answerDensityQuestion({ question, dataDir, theme: 'alpine_grid' });
+    assert.equal(overridden.ok, true);
+    let calls = await readFakeLog(logFile);
+    assert.equal(calls.some((args) => args[0] === 'theme' && args[1] === 'set'), false);
+    const questionCall = calls.find((args) => args[0] === 'question');
+    assert.equal(questionCall[questionCall.indexOf('--theme') + 1], 'alpine_grid');
+
+    const next = await answerDensityQuestion({ question: 'what time are rooms busiest?', dataDir });
+    assert.equal(next.clarificationRequest.reason, 'analytic_theme_selection_required');
+    calls = await readFakeLog(logFile);
+    assert.equal(calls.filter((args) => args[0] === 'question').length, 1);
+  });
+});
+
+test('theme routing fails closed for unsupported, malformed, failed, and ambiguous selections', async () => {
+  await withTempEnv(async (tempDir) => {
+    const { logFile } = await prepareThemeRuntime(tempDir, { unset: true });
+    const question = 'what are the busiest rooms?';
+    const scenarios = [
+      ['unsupported', 'FAKE_THEME_CAPABILITY', '0', 'analytic_theme_preference_unsupported'],
+      ['bad-list', 'FAKE_THEME_LIST_MALFORMED', '1', 'analytic_theme_contract_invalid'],
+      ['bad-get', 'FAKE_THEME_GET_MALFORMED', '1', 'analytic_theme_contract_invalid'],
+    ];
+    for (const [name, envName, value, reason] of scenarios) {
+      const scenarioCli = path.join(tempDir, name, 'density.mjs');
+      await writeFakeCli(scenarioCli);
+      process.env.DENSITY_CLI_BIN = scenarioCli;
+      process.env[envName] = value;
+      const result = await answerDensityQuestion({ question, dataDir: path.join(tempDir, name) });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, reason);
+      delete process.env[envName];
+    }
+    process.env.FAKE_THEME_SET_FAIL = '1';
+    const failedSet = await answerDensityQuestion({
+      question: 'what are the busiest rooms using Swiss theme?',
+      dataDir: path.join(tempDir, 'failed-set'),
+    });
+    assert.equal(failedSet.ok, false);
+    assert.equal(failedSet.reason, 'analytic_theme_preference_write_failed');
+    delete process.env.FAKE_THEME_SET_FAIL;
+
+    const ambiguous = await answerDensityQuestion({
+      question: 'what are the busiest rooms using Swiss and Editorial themes?',
+      dataDir: path.join(tempDir, 'ambiguous'),
+    });
+    assert.equal(ambiguous.ok, false);
+    assert.equal(ambiguous.clarificationRequest.reason, 'analytic_theme_ambiguous');
+    const multiple = await answerDensityQuestion({
+      question: 'what are the busiest rooms using Swiss theme and Editorial theme?',
+      dataDir: path.join(tempDir, 'multiple'),
+    });
+    assert.equal(multiple.ok, false);
+    assert.equal(multiple.clarificationRequest.reason, 'analytic_theme_ambiguous');
+    const calls = await readFakeLog(logFile);
+    assert.equal(calls.some((args) => args[0] === 'question'), false);
+  });
+});
+
+test('compact MCP transport preserves theme rewrite disclosure', async () => {
+  await withTempEnv(async (tempDir) => {
+    await prepareThemeRuntime(tempDir, { unset: true });
+    const result = await callMcp('tools/call', {
+      name: 'answer_density_question',
+      arguments: {
+        question: 'rank the busiest rooms using the Alpine Grid theme',
+        dataDir: path.join(tempDir, 'data'),
+      },
+    });
+    assert.deepEqual(result.structuredContent.followUp, {
+      effectiveQuestion: 'rank the busiest rooms',
+      reason: 'The plugin removed the theme phrase before scope matching and applied the selected theme separately.',
+    });
+  });
 });
 
 test('local_utilization_query cannot bypass native delivery when it generates a slide', async () => {
@@ -3379,7 +3792,30 @@ test('local utilization query regenerates a chart when a cache hit has no artifa
   });
 });
 
-test('local utilization query regenerates a chart unless cached artifacts match their content digests', async () => {
+test('local utilization query does not retry an artifact-free prepared-metrics answer', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const logFile = path.join(tempDir, 'calls.log');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CLI_LOG = logFile;
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+    process.env.FAKE_QUESTION_UI_ARTIFACT_FREE = '1';
+    process.env.FAKE_QUESTION_UI_PREPARED_CACHE = '1';
+
+    const result = await localUtilizationQuery({
+      dataDir: path.join(tempDir, 'data'),
+      question: 'what are the busiest rooms?',
+    });
+    const questionCalls = (await readFakeLog(logFile)).filter((args) => args[0] === 'question');
+
+    assert.equal(result.ok, true);
+    assert.equal(questionCalls.length, 1);
+    assert.equal(questionCalls[0].includes('--cached'), true);
+  });
+});
+
+test('local utilization query regenerates a prepared-metrics chart unless cached artifacts match their content digests', async () => {
   for (const artifactState of ['missing', 'empty', 'directory', 'wrong_content']) {
     await withTempEnv(async (tempDir) => {
       const fakeCli = path.join(tempDir, 'density.mjs');
@@ -3388,6 +3824,7 @@ test('local utilization query regenerates a chart unless cached artifacts match 
       process.env.DENSITY_CLI_BIN = fakeCli;
       process.env.FAKE_CLI_LOG = logFile;
       process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+      process.env.FAKE_QUESTION_UI_PREPARED_CACHE = '1';
       process.env.FAKE_QUESTION_UI_ARTIFACT_STATE = artifactState;
 
       const result = await localUtilizationQuery({
@@ -3456,6 +3893,9 @@ test('local utilization query preserves scoped analytics prompts as one-hop CLI 
       assert.equal(result.question, question);
       assert.equal(result.sourceLayer, 'local_customer_data');
       assert.equal(result.effectiveScope.operatingHours.start, 8);
+      if (question.includes('6am to 6pm')) {
+        assert.match(result.caveats.join(' '), /requested operating hours 6am-6pm.*CLI reported 8am-6pm/i);
+      }
       assert.equal(result.freshness.source, 'atlas_local_metrics');
     }
     const elapsedMs = Date.now() - startedAt;
@@ -3506,6 +3946,7 @@ test('answer density question turns broad scope misses into a fast clarification
     assert.equal(result.kind, 'density.clarification_request.v1');
     assert.equal(result.contract, 'density.clarification');
     assert.equal(result.reason, 'broad_scope_needs_resolution');
+    assert.equal(result.scopeResolution, 'no_match');
     assert.equal(result.intent, 'broad_scope_needs_resolution');
     assert.equal(result.chartSuppressed, true);
     assert.equal(result.nextAction.id, 'clarify_measured_building_scope');
@@ -3555,6 +3996,60 @@ test('local utilization query expands contextual normalization follow-ups before
     assert.equal(normalized.followUp.type, 'rewrite_contextual_question');
     assert.equal(normalized.followUp.previousQuestion, 'what is the most popular conference room size in Metro Tower?');
     assert.equal(questionCalls[1][1], 'what is the most popular conference room size in Metro Tower? average occupied hours per day from 6am to 6pm');
+  });
+});
+
+test('local utilization query preserves a contextual requested operating-hours range', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const logFile = path.join(tempDir, 'calls.log');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CLI_LOG = logFile;
+    process.env.FAKE_CHART_SUPPORT = '1';
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+
+    const dataDir = path.join(tempDir, 'data');
+    await localUtilizationQuery({ dataDir, question: 'what is the most popular conference room size in Metro Tower?' });
+    process.env.FAKE_OPERATING_HOURS = JSON.stringify({ start: 7, end: 19, label: '7am-7pm', source: 'user_requested' });
+    const result = await localUtilizationQuery({ dataDir, question: 'normalize that and use 7am to 7pm instead' });
+    process.env.FAKE_OPERATING_HOURS = JSON.stringify({ start: 9, end: 17, label: '9-5', source: 'user_requested' });
+    const nineToFive = await localUtilizationQuery({ dataDir, question: 'use 9 to 5 instead' });
+    const calls = await readFakeLog(logFile);
+    const questionCalls = calls.filter((args) => args[0] === 'question');
+
+    assert.equal(questionCalls[1][1], 'what is the most popular conference room size in Metro Tower? average occupied hours per day from 7am to 7pm');
+    assert.deepEqual(result.effectiveScope.operatingHours, {
+      start: 7,
+      end: 19,
+      label: '7am-7pm',
+      source: 'user_requested',
+    });
+    assert.equal(questionCalls[2][1], 'what is the most popular conference room size in Metro Tower? average occupied hours per day from 9 to 5');
+    assert.deepEqual(nineToFive.effectiveScope.operatingHours, {
+      start: 9,
+      end: 17,
+      label: '9-5',
+      source: 'user_requested',
+    });
+  });
+});
+
+test('local utilization query discloses when the CLI does not apply requested operating hours', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CHART_SUPPORT = '1';
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+
+    const result = await localUtilizationQuery({
+      dataDir: path.join(tempDir, 'data'),
+      question: 'rank meeting rooms from 6am to 6pm',
+    });
+
+    assert.equal(result.effectiveScope.operatingHours.label, '8am-6pm');
+    assert.match(result.caveats.join(' '), /requested operating hours 6am-6pm.*CLI reported 8am-6pm/i);
   });
 });
 
@@ -4704,6 +5199,55 @@ test('local utilization query routes sensor health questions to cloud-only senso
     assert.equal(result.sourceBadge, 'Live');
     assert.equal(result.contract.noLocalDuckdbFallback, true);
     assert.doesNotMatch(JSON.stringify(result), /local_customer_data/);
+  });
+});
+
+test('sensor questions outside the supported health vocabulary fail closed without substitution', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const logFile = path.join(tempDir, 'calls.log');
+    const dataDir = path.join(tempDir, 'data');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CLI_LOG = logFile;
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+    process.env.FAKE_SENSOR_HEALTH_UI = '1';
+
+    const direct = await sensorHealthReport({ dataDir, question: 'How many sensors are installed?' });
+    const routed = await answerDensityQuestion({ dataDir, question: 'How many sensors are installed?' });
+    const calls = await readFakeLog(logFile);
+
+    for (const result of [direct, routed]) {
+      assert.equal(result.ok, false);
+      assert.equal(result.unsupported, true);
+      assert.match(result.message, /supported sensor health or status/i);
+    }
+    assert.equal(calls.some((args) => args[0] === 'question'), false);
+  });
+});
+
+test('availability routing supports people and office vocabulary without stealing named-day history', async () => {
+  await withTempEnv(async (tempDir) => {
+    const fakeCli = path.join(tempDir, 'density.mjs');
+    const logFile = path.join(tempDir, 'calls.log');
+    const dataDir = path.join(tempDir, 'data');
+    await writeFakeCli(fakeCli);
+    process.env.DENSITY_CLI_BIN = fakeCli;
+    process.env.FAKE_CLI_LOG = logFile;
+    process.env.FAKE_CHART_SUPPORT = '1';
+    process.env.FAKE_QUESTION_UI_SUPPORT = '1';
+
+    const live = await localUtilizationQuery({ dataDir, question: 'How many people are in the office?' });
+    assert.equal(live.intent, 'live_wayfinding');
+    assert.equal(live.routedTool, 'live_wayfinding_status');
+
+    const historical = await localUtilizationQuery({ dataDir, question: 'Which office rooms were available Monday?' });
+    assert.equal(historical.intent, 'local_utilization');
+    assert.notEqual(historical.routedTool, 'live_wayfinding_status');
+
+    const zeroPeople = await localUtilizationQuery({ dataDir, question: 'Why were there zero people in the office Monday?' });
+    assert.equal(zeroPeople.intent, 'local_utilization');
+    assert.notEqual(zeroPeople.routedTool, 'data_health_report');
   });
 });
 

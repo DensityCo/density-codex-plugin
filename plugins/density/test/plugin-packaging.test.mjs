@@ -133,7 +133,8 @@ test('Density design contract makes the fixed slide default and preserves Broads
   assert.match(design, /Benchmark gold is benchmark-only/, 'design contract should reserve benchmark gold for benchmark context');
   assert.match(design, /source, freshness, and caveats visible at thumbnail size/, 'design contract should preserve trust context in thumbnails');
   assert.match(design, /^## Governed Themes$/m, 'design contract should authorize the governed theme registry');
-  assert.match(design, /ten named registry themes/, 'design contract should enumerate the named theme family');
+  assert.match(design, /nine named registry themes/, 'design contract should enumerate the named theme family');
+  assert.doesNotMatch(design, /institutional/, 'design contract must not list the retired theme');
   assert.match(design, /no theme may reposition a zone or repurpose a reserved color/, 'themes should stay inside the fixed zones and reserved encodings');
   assert.match(design, /^## Future Governed Editions$/m, 'design contract should define future edition governance');
   assert.match(design, /same design file[\s\S]+must not expose an edition API/, 'design contract should keep editions governed without a public API');
@@ -146,7 +147,8 @@ test('Density ships the slide orchestration contract with the density skill', as
   );
   assert.match(orchestration, /you choose only from named registries/i, 'orchestration contract should pin the probabilistic/deterministic boundary');
   assert.match(orchestration, /The QA gate.*hard-fails the\s+render/s, 'orchestration contract should make the code gate the authority');
-  assert.match(orchestration, /`institutional`[\s\S]+`newsprint_mono`/, 'orchestration contract should list the ten named themes');
+  assert.match(orchestration, /`product_clean`[\s\S]+`newsprint_mono`/, 'orchestration contract should list the nine named themes');
+  assert.doesNotMatch(orchestration, /institutional/, 'orchestration contract must not list the retired theme');
   assert.match(orchestration, /`table_graphic`/, 'orchestration contract should map families to archetypes');
   assert.match(orchestration, /fails the gate twice[\s\S]+answer in chat/, 'orchestration contract should carry the fail-twice-to-chat policy');
 });
@@ -220,7 +222,7 @@ test('Density guidance preserves the Prime question runtime contract', async () 
   assert.match(density, /Do not fall back to shell, DuckDB, SQL, or hand-built Parquet scans for ordinary questions/i, 'parent skill should prohibit manual fallback for ordinary questions');
   assert.match(density, /Do not use script fallback for an ordinary question/i, 'parent skill should reserve scripts for setup and debugging');
   assert.match(density, /zero local quer(?:y|ies), benchmark requests, chart rendering, or artifact writes/i, 'clarification should perform no analytical work');
-  assert.match(density, /delegated[^\n]+pick any[^\n]+live, measured, and past go-live/i, 'delegated broad scope should select only an eligible scope');
+  assert.match(density, /delegates scope selection[^\n]+live, measured, and past go-live/i, 'delegated broad scope should select only an eligible scope');
   assert.match(density, /`mixed_local_benchmark`/, 'parent data boundary should define Mixed provenance');
   assert.match(density, /full-wall latency[^\n]+routing[^\n]+PNG/i, 'parent skill should define end-to-end latency');
   assert.match(density, /answer ordinary historical questions immediately from the current local snapshot/i, 'parent skill should preserve immediate local answers');
@@ -240,6 +242,8 @@ test('Density guidance preserves the Prime question runtime contract', async () 
   assert.match(density, /`presentation: "broadsheet"`/, 'parent skill should preserve the named Broadsheet variant');
   assert.match(utilization, /`context_needed`[^\n]+`follow_up_question` verbatim/i, 'utilization should preserve validated analytic confidence handling');
   assert.match(utilization, /Never re-derive or restate numbers/i, 'utilization should prohibit agent-authored analytic numbers');
+  assert.doesNotMatch(utilization, /5\.8%|1\.9 points|3\.9%/, 'utilization examples should not fabricate customer-looking values');
+  assert.doesNotMatch(density, /["']pick any building["']/i, 'parent guidance should not teach a quoted magic delegation phrase');
   assert.match(utilization, /copy only the artifact `headline` and `subtitle` exactly[^\n]+end the turn/i, 'utilization should terminate after exact native slide delivery');
   assert.match(density, /copy only the artifact `headline` and `subtitle` exactly[^\n]+end the turn/i, 'parent skill should terminate after exact native slide delivery');
   assert.match(utilization, /chart follow-ups[^\n]+`answer_density_question` once[^\n]+reattaches/i, 'utilization should reattach follow-up charts through the native front door');

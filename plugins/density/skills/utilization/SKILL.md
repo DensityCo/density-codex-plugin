@@ -15,8 +15,8 @@ Always use `../../assets/design.md` for visual artifacts.
 
 - Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to trust it.
 - Do not give standalone utilization numbers. Pair occupied hours, percent utilized, time used, saturation, or rankings with a denominator or comparison such as capacity, working-hours window, prior period, floor average, building average, portfolio average, or another known internal baseline.
-- Prefer numeric context over qualitative shorthand: say "5.8% of the working day (8am-6pm local time), 1.9 points above the building baseline of 3.9%" rather than only saying "higher pressure."
-- Define operational terms in place the first time they matter. Prefer "working day (8am-6pm local time, weekdays)" over "working day" and "time used (share of intervals with occupancy above zero)" over "time used" when that definition affects interpretation.
+- Prefer numeric context over qualitative shorthand: report "[measured percent] of the working day ([operating-hours window]), [delta] above the [named baseline]" rather than only saying "higher pressure."
+- Define operational terms in place the first time they matter. Define "working day" from the returned `effectiveScope.operatingHours` and `effectiveScope.workingDays`; define "time used" as the share of intervals with occupancy above zero when that definition affects interpretation.
 - Keep CLI, MCP, shell, cache, and tool-routing mechanics out of user-facing prose unless the user asks, an action is blocked, or those mechanics change the next step.
 - Ask one crisp clarifying question when building, floor, space type, time window, or current-versus-historical scope is ambiguous.
 - Keep local historical data, live availability, benchmark context, and sensor health separate.
@@ -30,7 +30,7 @@ Keep user-visible progress updates at the workplace level:
 - Say what decision you are making for the user, not which skill, MCP tool, CLI command, cache path, SQL query, or local file is being used.
 - Do not mention parser misses, reserved SQL words, DuckDB internals, shell commands, skill loading, or tool routing unless the user explicitly asks for debugging.
 - If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed to trust the final answer.
-- Good updates sound like: "I am checking the local historical window and office scope" or "I am using complete local business days (weekdays within the stated local working-hours window) so a partial day does not understate utilization."
+- When progress helps, state the scope, time window, or completeness choice that affects the answer.
 
 ## Presentable Analytic Answers
 
@@ -52,7 +52,7 @@ For metric definitions and query rules, read `references/atlas-utilization-metho
 3. For named or broad building scope, use `available_buildings`. Ordinary utilization artifacts require a live, measured, past-go-live scope with `chartQueryable: true`. Query other lifecycle states only when the user explicitly asks about lifecycle, inventory, setup, or data health.
 4. If you must query manually, use Atlas local views and the effective scope rules in `references/atlas-utilization-methodology.md`.
 5. Sync or repair only when that is the right next action for the user's request.
-6. Report the source layer, tool, date range, business-hours assumption with definition, freshness, confidence, and caveats.
+6. Report the source layer, tool, date range, returned operating-hours and working-days definitions, freshness, confidence, and caveats.
 7. When relevant, add the nearest internal comparison first, then use Density benchmark-network context through `benchmark_compare` if benchmark access is available.
 8. For broad scope prompts such as "any one building," use the plugin front door or data-profile coverage plus lifecycle readiness to choose a valid measured scope. If the local question router says the scope is missing, do not turn that into a long manual DuckDB/Parquet investigation in the user-facing answer; either recover through the plugin surfaces or ask one crisp clarification.
 9. For chart follow-ups, call `answer_density_question` once with the exact follow-up text so it reattaches the prior canonical slide. Do not call a different analytic tool or create a fallback artifact.
@@ -70,9 +70,9 @@ For metric definitions and query rules, read `references/atlas-utilization-metho
 
 ## Default Assumptions
 
-- Working-day analyses should state the business-hours window used in the same sentence or parenthetical, such as "working day (8am-6pm local time, weekdays)."
-- Default Atlas-style utilization charts to the CLI-reported effective scope, usually `8am-6pm` local time.
-- Use working days when the user asks for business, working, or weekday usage; otherwise disclose whether all days or weekdays were used.
+- Working-day analyses should state the operating-hours and working-days labels returned in `effectiveScope` in the same sentence or parenthetical.
+- Default Atlas-style utilization charts to the CLI-reported effective scope. If its source is `atlas_default`, identify the hours or days as fallback assumptions.
+- Explicit business, working, or weekday filters override a derived schedule. Otherwise, report the derived or fallback working days returned by the CLI.
 - If the user gives no window, use the prepared local data window and disclose it.
 - If the user says "last two weeks", use 14 days if available.
 - For room and booth rankings, prefer time-used or occupied-hours metrics over raw event counts.

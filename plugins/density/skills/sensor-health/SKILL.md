@@ -24,7 +24,7 @@ Keep user-visible progress updates at the workplace level:
 - Say what decision you are making for the user, not which skill, MCP tool, CLI command, cache path, SQL query, or local file is being used.
 - Do not mention parser misses, reserved SQL words, DuckDB internals, shell commands, skill loading, or tool routing unless the user explicitly asks for debugging.
 - If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed to trust the final answer.
-- Good updates sound like: "I am checking the local historical window and office scope" or "I am using complete local business days (weekdays within the stated local working-hours window) so a partial day does not understate utilization."
+- When progress helps, state the scope, time window, or completeness choice that affects the answer.
 
 Read `references/sensor-health-methodology.md` when interpreting health status or explaining what unhealthy data means.
 
