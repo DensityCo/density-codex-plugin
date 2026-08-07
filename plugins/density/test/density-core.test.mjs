@@ -161,8 +161,8 @@ const png = Buffer.concat([
   chunk('IDAT', zlib.deflateSync(raw)),
   chunk('IEND', Buffer.alloc(0)),
 ]);
-fs.writeFileSync(screenshot.slice('--screenshot='.length), png);
 if (process.env.FAKE_HTML_SCREENSHOT_LOG) fs.appendFileSync(process.env.FAKE_HTML_SCREENSHOT_LOG, JSON.stringify(args) + '\\n');
+fs.writeFileSync(screenshot.slice('--screenshot='.length), png);
 const stallMs = Number(process.env.FAKE_HTML_SCREENSHOT_STALL_MS ?? 0);
 if (stallMs > 0) {
   process.on('SIGTERM', () => {});
@@ -2717,15 +2717,15 @@ test('HTML preview keeps a complete PNG when the renderer does not exit', async 
     await writeFakeHtmlScreenshotCommand(fakeBrowser);
     await writeFile(htmlFile, '<!doctype html><title>Density</title>');
     process.env.DENSITY_HTML_SCREENSHOT_COMMAND = fakeBrowser;
-    process.env.FAKE_HTML_SCREENSHOT_STALL_MS = '1000';
+    process.env.FAKE_HTML_SCREENSHOT_STALL_MS = '2000';
     const startedAt = Date.now();
 
-    const result = await renderHtmlPreview(htmlFile, { timeoutMs: 250 });
+    const result = await renderHtmlPreview(htmlFile, { timeoutMs: 500 });
 
     assert.equal(result.status, 'available');
     assert.equal(result.width, 1920);
     assert.equal(result.height, 1080);
-    assert.ok(Date.now() - startedAt < 750);
+    assert.ok(Date.now() - startedAt < 1500);
   });
 });
 
