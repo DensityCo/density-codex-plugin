@@ -110,7 +110,8 @@ export const normalizeRuntimeManifest = (manifest, options = {}) => {
   }
 
   const platformKey = `${platform}-${arch}`;
-  const expectedAssetName = `density-cli-v${cliVersion}-${platformKey}.tar.gz`;
+  const runtimeName = assetName.startsWith('density-mcp-') ? 'density-mcp' : 'density-cli';
+  const expectedAssetName = `${runtimeName}-v${cliVersion}-${platformKey}.tar.gz`;
   if (assetName !== expectedAssetName) {
     throw new Error(`Runtime manifest assetName '${assetName}' does not match expected asset '${expectedAssetName}'.`);
   }
@@ -120,12 +121,13 @@ export const normalizeRuntimeManifest = (manifest, options = {}) => {
     cliVersion,
     platformKey,
     prerelease: parsedVersion.prerelease.length > 0,
+    runtimeName,
     sha256,
   };
 };
 
 export const runtimeAssetUrl = (runtime, releaseRepo = defaultReleaseRepo) =>
-  `https://github.com/${releaseRepo}/releases/download/density-cli-runtime-v${runtime.cliVersion}/${runtime.assetName}`;
+  `https://github.com/${releaseRepo}/releases/download/${runtime.runtimeName}-runtime-v${runtime.cliVersion}/${runtime.assetName}`;
 
 export const updateManagedCliRuntime = async (options) => {
   const manifest = await readManifest(options.runtimeManifest);
