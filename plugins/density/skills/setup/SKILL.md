@@ -26,6 +26,7 @@ Keep user-visible progress updates at the workplace level:
 
 Prefer the plugin MCP tools when available:
 
+- `status`
 - `setup`
 - `install_managed_cli`
 - `auth_login`
@@ -35,7 +36,6 @@ Prefer the plugin MCP tools when available:
 - `create_demo_customer`
 - `storage_report`
 - `available_buildings`
-- `starter_questions`
 - `repair_fast_questions`
 
 Fallback scripts live in the plugin root under `scripts/`.
@@ -43,15 +43,16 @@ Fallback scripts live in the plugin root under `scripts/`.
 ## Workflow
 
 1. Run setup or `node scripts/density-setup.mjs --json`.
-2. If setup says a plugin update is available, tell the user: "A newer version of the Density plugin is available. Say `update @density` and I can install it." Run the returned update command only after the user says yes, `update @density`, `update density`, or an equivalent explicit approval. After updating, ask the user to start a new thread so the latest Density skill and tools load.
+2. If setup says a plugin update is available, relay its exact update prompt. Run its update command only after explicit approval. After updating, ask the user to restart the host so the latest Density skill and tools load.
 3. If setup asks for the managed CLI runtime, use `install_managed_cli`. This is an explicit download/copy action that verifies the manifest checksum before installing into `~/.density-cli/plugin-runtime/`.
 4. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
-5. If Parquet or fast-question inputs are missing, present the onboarding choices from setup/onboard_customer. Recommend fetching 30 days for all locations now and continuing the remaining supported history in the background.
-6. If generic Parquet exists but normalized fast-question metadata or the prepared metrics cache is missing, use `repair_fast_questions`. Verify that it publishes a valid organization-scoped prepared cache; normal questions fall back to canonical local views on a cache miss.
+5. If Parquet inputs are missing, present the onboarding choices from setup/onboard_customer. Recommend fetching 30 days for all locations now and continuing the remaining supported history in the background.
+6. Confirm that `query_db` is advertised. Use it with the supplied schema resource for local historical analytics. If it is missing, update the CLI before answering historical questions from the database.
 7. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
 8. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
-9. Use `storage_report` when the user asks what is local, stale, oversized, or suspicious.
-10. Use `onboarding_status` to check a background deeper-history job and tell the user when the full supported local history is ready. Use `historical_export` when the user explicitly asks for a separate broader customer-owned local history export.
+9. Use `status` for a concise configuration, sync, storage, and readiness summary.
+10. Use `storage_report` for detailed local table sizes.
+11. Use `onboarding_status` to check a background deeper-history job and tell the user when the full supported local history is ready. Use `historical_export` when the user explicitly asks for a separate broader customer-owned local history export.
 
 Normal setup should not run `npm install` or build the CLI from source. Use `DENSITY_CLI_REPO` plus `DENSITY_CLI_BUILD_FROM_SOURCE=1` only for explicit development work.
 
@@ -59,7 +60,7 @@ Normal setup should not run `npm install` or build the CLI from source. Use `DEN
 
 Parquet is durable. DuckDB is the query engine and cache.
 
-Good local analytics stores include canonical Parquet tables plus normalized fast-question inputs such as:
+Good local analytics stores include canonical Parquet tables such as:
 
 - `spaces`
 - `space_labels`
@@ -67,7 +68,7 @@ Good local analytics stores include canonical Parquet tables plus normalized fas
 - `space_metrics`
 - `space_occupancy`
 
-Treat `parquetReady` as necessary but not sufficient for utilization. For fast historical questions, also check `fastQuestionsReady` and starter-cache usefulness when available.
+Treat `parquetReady` as necessary for local historical utilization. Use `query_db` with the supplied schema resource to query scoped `density_*` tables.
 
 ## Onboarding Choices
 
@@ -81,7 +82,7 @@ Windows up to 7 days may use 15-minute metrics; longer windows use hourly metric
 
 Do not describe the recent preload as a limit on customer access to their own data. Until the background job completes, answers should disclose that local history is recent-first and still filling in deeper history.
 
-The onboarding background sync that fills deeper supported history is distinct from the per-question freshness refresh. Ordinary historical questions answer immediately from the current local snapshot. Only an eligible completed all-spaces metrics snapshot older than 24 hours may start one organization-deduplicated background metrics refresh; a failed refresh preserves the answer, and a per-space or unknown scope never broadens. A successful freshness refresh rebuilds the prepared metrics cache. Use explicit sync, onboarding status, or data-health recovery when deeper history, unsupported scope, or repair is required.
+The onboarding background sync that fills deeper supported history is distinct from user-requested analysis. Use explicit sync, onboarding status, or data-health recovery when deeper history, unsupported scope, or repair is required.
 
 ## Wayfinding Readiness
 

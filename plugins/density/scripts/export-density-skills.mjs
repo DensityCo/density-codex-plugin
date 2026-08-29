@@ -1,23 +1,28 @@
 #!/usr/bin/env node
-import { cp, mkdir, mkdtemp, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const defaultPluginRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const supportedHosts = new Set(['claude', 'codex']);
 
-const usage = `Usage: node plugins/density/scripts/export-density-skills.mjs --host <claude|codex> --out <bundle-root>
+const usage = `Usage: node plugins/density/scripts/export-density-skills.mjs --host <claude|codex> --out <bundle-root> [options]
 
 Exports a self-contained Density skill bundle with skills, assets, MCP configuration, and its runtime closure.
 Claude exports omit Codex-only agents/openai.yaml metadata.
+
+Claude options:
+  --cli-bin <path>   Persist the Density CLI path in the generated MCP configuration.
+  --data-dir <path>  Persist the Density data path in the generated MCP configuration.
 `;
 
 const runtimeFiles = [
   '.mcp.json',
   '.codex-plugin/plugin.json',
   'assets/density-icon.png',
+  'guidance/density-system-prompt.md',
+  'mcp-server/agent-response-envelope.mjs',
   'mcp-server/server.mjs',
-  'scripts/density-ask-chart.mjs',
   'scripts/density-background-deep-sync.mjs',
   'scripts/density-core.mjs',
   'scripts/density-demo-customer.mjs',
@@ -41,10 +46,23 @@ const parseArgs = (argv) => {
       index += 1;
       continue;
     }
+    if (arg === '--cli-bin') {
+      options.cliBin = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg === '--data-dir') {
+      options.dataDir = argv[index + 1];
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   if (!supportedHosts.has(options.host)) throw new Error('--host must be claude or codex');
   if (!options.outputRoot) throw new Error('--out is required');
+  if (options.host !== 'claude' && (options.cliBin || options.dataDir)) {
+    throw new Error('--cli-bin and --data-dir are Claude-only options');
+  }
   return options;
 };
 
@@ -65,7 +83,26 @@ const nearestPhysicalPath = async (target) => {
   }
 };
 
-export const exportDensitySkills = async ({ host, outputRoot, pluginRoot = defaultPluginRoot }) => {
+const claudeManifest = (manifest) => ({
+  name: manifest.name,
+  version: manifest.version,
+  description: manifest.description,
+  author: manifest.author,
+  homepage: manifest.homepage ?? manifest.website,
+  license: manifest.license,
+  keywords: manifest.keywords,
+});
+
+const definedEntries = (value) => Object.fromEntries(
+  Object.entries(value).filter(([, entry]) => typeof entry === 'string' && entry.length > 0),
+);
+
+export const exportDensitySkills = async ({
+  host,
+  outputRoot,
+  pluginRoot = defaultPluginRoot,
+  claudeEnv = {},
+}) => {
   if (!supportedHosts.has(host)) throw new Error(`Unsupported skill host: ${host}`);
 
   const sourceSkills = path.join(pluginRoot, 'skills');
@@ -113,10 +150,13 @@ export const exportDensitySkills = async ({ host, outputRoot, pluginRoot = defau
           return !path.relative(source, candidate).split(path.sep).includes('agents');
         },
       });
+      const skillFile = path.join(destination, 'SKILL.md');
+      const skill = await readFile(skillFile, 'utf8');
+      await writeFile(skillFile, skill.replaceAll('../../guidance/design.md', '../../assets/design.md'), 'utf8');
     }
 
     await mkdir(path.join(stagingRoot, 'assets'), { recursive: true });
-    await cp(path.join(pluginRoot, 'assets', 'design.md'), path.join(stagingRoot, 'assets', 'design.md'), { force: true });
+    await cp(path.join(pluginRoot, 'guidance', 'design.md'), path.join(stagingRoot, 'assets', 'design.md'), { force: true });
 
     for (const relativeFile of runtimeFiles) {
       const destination = path.join(stagingRoot, relativeFile);
@@ -127,6 +167,10 @@ export const exportDensitySkills = async ({ host, outputRoot, pluginRoot = defau
       ? {
           command: 'node',
           args: ['${CLAUDE_PLUGIN_ROOT}/mcp-server/server.mjs'],
+          env: {
+            DENSITY_PLUGIN_HOST: 'claude',
+            ...definedEntries(claudeEnv),
+          },
         }
       : {
           command: 'node',
@@ -138,6 +182,15 @@ export const exportDensitySkills = async ({ host, outputRoot, pluginRoot = defau
         density: mcpServer,
       },
     }, null, 2)}\n`, 'utf8');
+    if (host === 'claude') {
+      const codexManifest = JSON.parse(await readFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
+      await mkdir(path.join(stagingRoot, '.claude-plugin'), { recursive: true });
+      await writeFile(
+        path.join(stagingRoot, '.claude-plugin', 'plugin.json'),
+        `${JSON.stringify(claudeManifest(codexManifest), null, 2)}\n`,
+        'utf8',
+      );
+    }
     if (destinationExists) await rmdir(destinationRoot);
     await rename(stagingRoot, destinationRoot);
   } catch (error) {
@@ -145,7 +198,12 @@ export const exportDensitySkills = async ({ host, outputRoot, pluginRoot = defau
     throw error;
   }
 
-  return { host, outputRoot: destinationRoot, skillCount: skillNames.length, runtimeFileCount: runtimeFiles.length };
+  return {
+    host,
+    outputRoot: destinationRoot,
+    skillCount: skillNames.length,
+    runtimeFileCount: runtimeFiles.length + (host === 'claude' ? 1 : 0),
+  };
 };
 
 const main = async () => {
@@ -154,7 +212,14 @@ const main = async () => {
     console.log(usage);
     return;
   }
-  const result = await exportDensitySkills(options);
+  const result = await exportDensitySkills({
+    host: options.host,
+    outputRoot: options.outputRoot,
+    claudeEnv: {
+      DENSITY_CLI_BIN: options.cliBin,
+      DENSITY_CLI_DATA_DIR: options.dataDir,
+    },
+  });
   console.log(`Exported ${result.skillCount} Density skills for ${result.host} to ${result.outputRoot}`);
 };
 

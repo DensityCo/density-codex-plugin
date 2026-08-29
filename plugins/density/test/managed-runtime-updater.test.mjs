@@ -42,10 +42,10 @@ test('normalizeRuntimeManifest accepts stable SemVer runtime manifests', () => {
   const runtime = normalizeRuntimeManifest(stableManifest);
   assert.deepEqual(runtime, {
     assetName: 'density-cli-v0.1.2-darwin-arm64.tar.gz',
+    artifactPrefix: 'density-cli',
     cliVersion: '0.1.2',
     platformKey: 'darwin-arm64',
     prerelease: false,
-    runtimeName: 'density-cli',
     sha256: 'a'.repeat(64),
   });
   assert.equal(
@@ -57,14 +57,13 @@ test('normalizeRuntimeManifest accepts stable SemVer runtime manifests', () => {
 test('normalizeRuntimeManifest accepts renamed Density MCP runtime manifests', () => {
   const runtime = normalizeRuntimeManifest({
     ...stableManifest,
-    cliVersion: '0.2.1',
-    assetName: 'density-mcp-v0.2.1-darwin-arm64.tar.gz',
+    assetName: 'density-mcp-v0.1.2-darwin-arm64.tar.gz',
   });
 
-  assert.equal(runtime.runtimeName, 'density-mcp');
+  assert.equal(runtime.artifactPrefix, 'density-mcp');
   assert.equal(
     runtimeAssetUrl(runtime),
-    'https://github.com/DensityCo/density-codex-plugin/releases/download/density-mcp-runtime-v0.2.1/density-mcp-v0.2.1-darwin-arm64.tar.gz'
+    'https://github.com/DensityCo/density-codex-plugin/releases/download/density-mcp-runtime-v0.1.2/density-mcp-v0.1.2-darwin-arm64.tar.gz'
   );
 });
 
@@ -82,7 +81,7 @@ test('normalizeRuntimeManifest rejects prereleases unless explicitly allowed', (
 test('normalizeRuntimeManifest rejects mismatched asset names', () => {
   assert.throws(
     () => normalizeRuntimeManifest({ ...stableManifest, assetName: 'density-cli-v0.1.3-darwin-arm64.tar.gz' }),
-    /does not match expected asset/
+    /does not match a supported Density runtime asset/
   );
 });
 

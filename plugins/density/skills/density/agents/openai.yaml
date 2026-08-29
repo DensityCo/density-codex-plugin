@@ -1,4 +1,6 @@
 interface:
   display_name: "Density"
-  short_description: "Route ordinary Density questions."
-  default_prompt: "Use $density as the front door for my ordinary Density question and route it to the right local, live, benchmark, setup, or health surface."
+  short_description: "Answer Density questions with local, live, benchmark, setup, and health tools."
+  default_prompt: "Use $density for Density questions. For historical analysis, read density://schema directly once, then use query_db with the supplied schema and chart context. Do not list tools or resources first. Use local_data_profile or data_health_report for local freshness, live_wayfinding_status for current availability, and benchmark_compare for approved comparisons."
+policy:
+  allow_implicit_invocation: true

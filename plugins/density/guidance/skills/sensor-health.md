@@ -7,7 +7,7 @@ description: Use when the user asks about Density sensor health, stale or missin
 
 Use this skill for cloud sensor health, live signal trust, coverage, uptime, stale data, and operational data-quality explanations.
 
-Always use `../../assets/design.md` for visual artifacts.
+Always use `../../guidance/design.md` for visual artifacts.
 
 ## Interaction Contract
 
@@ -30,7 +30,10 @@ Read `references/sensor-health-methodology.md` when interpreting health status o
 
 ## Rules
 
-- Use `sensor_health_report` when available.
+- Use `sensor_health_report` with `mode: "current"` for the latest cloud inventory and raw health status.
+- Use `sensor_health_report` with `mode: "history"`, one building, an exact start and end, and `interval: "day"` for daily sensor uptime. Historical mode uses sensors currently assigned to the building and preserves unknown time as missing.
+- Use the selected Density organization. Add a building, floor, status, or sensor filter only when the user requests it.
+- Request sensor-level rows only when the user needs device detail. Use aggregates by default.
 - Sensor health is cloud-only. Do not infer it from DuckDB, Parquet, local historical utilization, or zero/nonzero occupancy rows.
 - Separate product health from workplace behavior.
 - Do not call a space unused when the sensor or data path is unhealthy.

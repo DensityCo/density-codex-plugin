@@ -1,4 +1,6 @@
 interface:
   display_name: "Floorplan"
-  short_description: "Show Density data on a floorplan."
+  short_description: "Show Density data spatially on a floorplan."
   default_prompt: "Use $floorplan to show Density data visually on a floorplan."
+policy:
+  allow_implicit_invocation: false

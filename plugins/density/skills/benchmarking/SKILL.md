@@ -7,7 +7,7 @@ description: Use when the user asks for an approved Density peer benchmark, targ
 
 Use this skill for benchmark scorecards, peer comparisons, target ranges, and portfolio-level interpretation.
 
-Always use `../../assets/design.md` for visual artifacts.
+Always use `../../guidance/design.md` for visual artifacts.
 
 ## Interaction Contract
 
@@ -37,7 +37,9 @@ Read `references/darshan-benchmark-methodology.md` before answering benchmark ma
 - Treat every benchmark answer as comparative by construction: measured customer value, nearest internal customer comparison, then the approved Density benchmark segment when available.
 - Name the benchmark segment specifically, such as room-size bucket, space function, floor type, capacity bucket, region, or workplace cohort returned by the benchmark source. Avoid generic phrases like "broader benchmark" when a specific segment is available.
 - Use numbers and percentages together when they improve comprehension: measured value, denominator or baseline, delta, ratio, percentile, sample size, and reliability.
-- Include the benchmark time basis when available, such as "per working day (8am-6pm local time)" or "during business hours (defined by the building settings)." If the benchmark source does not expose the basis, say that the time-basis comparison is unavailable.
+- Include the benchmark time basis when available.
+- Use `<value> per working day (<window>)` or state the building business-hours definition.
+- If the benchmark source does not expose the basis, say that the comparison is unavailable.
 - Keep raw peer distributions server-side or inside the benchmark API contract.
 - Return display-safe benchmark findings, not raw customer peer rows.
 - Separate findings from recommendations.

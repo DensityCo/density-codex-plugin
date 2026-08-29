@@ -1,13 +1,13 @@
 ---
 name: floorplan
-description: Use when the user wants Density spaces, utilization, rankings, health, or live availability shown visually on a floorplan.
+description: Use only when the user explicitly asks for a floorplan, map, heatmap, or spatial overlay of Density data.
 ---
 
 # Density Floorplan
 
 Use this skill for Density floorplan artifacts and overlays.
 
-Always use `../../assets/design.md` as the visual contract.
+Always use `../../guidance/design.md` as the visual contract.
 
 ## Interaction Contract
 
@@ -39,7 +39,7 @@ Keep user-visible progress updates at the workplace level:
 ## Data Routing
 
 - Historical utilization floorplan artifacts should use `floor_usage_report` when MCP tools are available, or `density viz --html --report floor-usage --format json` as the fallback.
-- Historical utilization overlays should use the `utilization` skill.
+- Historical utilization overlays should use `query_db` with `density://schema`.
 - Real-time availability overlays should use the `wayfinding` skill.
 - Sensor coverage or offline/stale overlays should use the `sensor-health` skill.
 - Missing local data or zero-data diagnosis should use the `data-health` skill.

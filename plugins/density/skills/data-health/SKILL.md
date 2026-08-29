@@ -7,6 +7,11 @@ description: Use when the user asks why Density local data is missing, stale, ze
 
 Use this skill for local Parquet/DuckDB readiness, freshness, zero-data diagnosis, sync gaps, and repair guidance.
 
+For a broad configuration, sync, storage, or readiness question, use `status` first.
+For a how-fresh or how-current local-data question, use `local_data_profile` first.
+Use `data_health_report` for missing rows, stale coverage, zero results, sync gaps, and readiness diagnosis.
+Use `query_db` for historical utilization, `live_wayfinding_status` for current availability, and `benchmark_compare` for approved benchmark context.
+
 ## Interaction Contract
 
 - Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to trust it.
@@ -26,34 +31,36 @@ Keep user-visible progress updates at the workplace level:
 
 Prefer the plugin MCP tools when available:
 
+- `status`
 - `setup`
 - `local_data_profile`
 - `data_health_report`
 - `storage_report`
-- `starter_questions`
 - `repair_fast_questions`
 - `onboard_customer`
 - `onboarding_status`
 - `historical_export`
+
+If a tool returns a validation error, make at most one repair using the exact returned error.
+Do not retry blindly or switch to another route.
+Distinguish no matching rows, incomplete coverage, and an unsupported metric in the diagnosis.
 
 ## Diagnosis Checklist
 
 Check these before answering an analytical question from local data:
 
 - canonical Parquet tables exist
-- normalized fast-question tables exist
 - local metrics cover the requested time window
 - timestamps overlap the user's requested date range
 - space metadata joins to metrics
 - space type filters match the product taxonomy
 - parent/child hierarchy is handled correctly
 - uptime or health filters are not removing everything
-- starter answers include nonzero useful results when applicable
-- the organization-scoped prepared metrics cache is valid when fast-path performance is expected
+- the scoped database schema exposes the required `density_*` tables
 
 ## Response Rule
 
-When data is not good enough, say exactly what is missing and what evidence showed that. Then give one primary next action: repair metadata, sync metrics, export Parquet, warm starter questions, or narrow the question.
+When data is not good enough, say exactly what is missing and what evidence showed that. Then give one primary next action: repair metadata, sync metrics, export Parquet, update the CLI for direct DB tools, or narrow the question.
 
 If the issue is that the requested window is broader than the recent preload, check `onboarding_status` first. If a background deeper-history job is still running, say the local dataset is recent-first and still filling in deeper history. If no job exists, recommend the deeper-history onboarding/export path rather than implying the local-first product is capped at the preload window.
 
@@ -64,4 +71,7 @@ When debugging local data freshness or sync gaps, use `state.json` as the source
 Prefer deterministic recovery: retry with the same cursor first, and rebuild only as an explicit fallback.
 Use incomplete recent data only for deliberate diagnostics; do not quietly use it for normal utilization answers.
 
-The ordinary historical question path answers immediately from the current local snapshot and never labels that snapshot live. A completed all-spaces metrics snapshot is eligible for a background freshness refresh only when it is older than 24 hours; exactly 24 hours is still fresh. Start at most one organization-deduplicated refresh, and let a failed refresh preserve the current answer. A per-space or unknown snapshot scope must never broaden to all spaces. A successful refresh rebuilds the prepared metrics cache. Keep this per-question freshness refresh distinct from onboarding background sync, which fills deeper history. For prepared metrics cache problems, inspect the reported hit/miss, dependency fingerprint, organization scope, and repair result; a miss should fall back to canonical local views rather than change answer semantics.
+Historical database answers must use `query_db` with the supplied scoped schema, never shell, raw DuckDB, scripts, or manual Parquet scans.
+Current availability must use `live_wayfinding_status`.
+Benchmark answers must use `benchmark_compare`.
+Keep onboarding background sync distinct from user-requested analysis.
