@@ -21,7 +21,6 @@ const EXPECTED_SKILLS = [
   'floorplan',
   'sensor-health',
   'setup',
-  'utilization',
   'wayfinding',
 ];
 
@@ -31,12 +30,11 @@ const EXPECTED_MCP_TOOLS = [
   'auth_login',
   'onboard_customer',
   'onboarding_status',
+  'status',
   'historical_export',
   'create_demo_customer',
-  'answer_density_question',
-  'ask_chart',
-  'analytic_slide',
-  'local_utilization_query',
+  'query_db',
+  'configure_brand',
   'floor_usage_report',
   'local_data_profile',
   'available_buildings',
@@ -45,9 +43,9 @@ const EXPECTED_MCP_TOOLS = [
   'benchmark_compare',
   'sensor_health_report',
   'storage_report',
-  'starter_questions',
-  'repair_fast_questions',
 ];
+
+const LEGACY_ANALYTICS_TOOLS = ['density_analyze', 'get_db_schema'];
 
 test('Density package exposes exactly the expected skills', async () => {
   const entries = await readdir(skillsDir, { withFileTypes: true });
@@ -92,6 +90,19 @@ test('Density packaged skills mirror shared guidance source', async () => {
   }
 });
 
+test('Density canonical skills keep analytic comparisons unrounded', async () => {
+  for (const file of [
+    path.join(skillsDir, 'density', 'SKILL.md'),
+    path.join(guidanceDir, 'skills', 'density.md'),
+  ]) {
+    const text = await readFile(file, 'utf8');
+    assert.match(text, /Use unrounded values for bin assignment, threshold tests, ordering, and\s+comparisons\./);
+    assert.match(text, /Return raw numeric values from SQL\./);
+    assert.match(text, /renderer applies display precision\./);
+    assert.doesNotMatch(text, /round them to whole-number percentages in\s+SQL/);
+  }
+});
+
 test('Density package files are tracked by git', async () => {
   const pathspecs = [
     'plugins/density/guidance',
@@ -113,16 +124,13 @@ test('Density package files are tracked by git', async () => {
 });
 
 test('Density design contract makes the fixed slide default and preserves Broadsheet/Tufte as a variant', async () => {
-  const design = await readFile(path.join(pluginRoot, 'assets', 'design.md'), 'utf8');
-  const guidance = await readFile(path.join(guidanceDir, 'design.md'), 'utf8');
-
-  assert.equal(design, guidance, 'packaged design contract is stale relative to shared guidance');
+  const design = await readFile(path.join(guidanceDir, 'design.md'), 'utf8');
 
   assert.match(design, /Broadsheet\/Tufte/, 'design contract should name the intended analytical aesthetic');
   assert.match(design, /high signal-to-ink ratio/, 'design contract should retain the Tufte-style signal discipline');
   assert.match(design, /generic dashboard chrome/, 'design contract should reject generic dashboard styling');
   assert.match(design, /must never overlap the title, marks, axes, or each other/, 'design contract should prohibit title/legend/chart collisions');
-  assert.match(design, /Density CLI or plugin chart contract/, 'design contract should prefer plugin artifacts over one-off chart scripts');
+  assert.match(design, /Density MCP or plugin chart contract/, 'design contract should prefer plugin artifacts over one-off chart scripts');
   assert.match(design, /^## Immutable Editorial Constitution$/m, 'design contract should separate the canonical editorial identity');
   assert.match(design, /canonical default Density presentation is the fixed slide layout/, 'design contract should make the fixed slide default explicit');
   assert.match(design, /Broadsheet\/Tufte is the explicit chart variant and compatibility fallback/, 'design contract should preserve the editorial chart identity as a named variant');
@@ -132,12 +140,38 @@ test('Density design contract makes the fixed slide default and preserves Broads
   assert.match(design, /datum trust state outranks any edition accent/, 'design contract should prioritize trust semantics over edition styling');
   assert.match(design, /Benchmark gold is benchmark-only/, 'design contract should reserve benchmark gold for benchmark context');
   assert.match(design, /source, freshness, and caveats visible at thumbnail size/, 'design contract should preserve trust context in thumbnails');
+  assert.match(design, /displayed and total row counts/, 'design contract should disclose ranked subsets');
+  assert.match(design, /Offer the remaining rows or slides/, 'design contract should offer omitted ranked results');
   assert.match(design, /^## Governed Themes$/m, 'design contract should authorize the governed theme registry');
-  assert.match(design, /nine named registry themes/, 'design contract should enumerate the named theme family');
+  assert.match(design, /ten named registry themes/, 'design contract should enumerate the named theme family');
   assert.doesNotMatch(design, /institutional/, 'design contract must not list the retired theme');
   assert.match(design, /no theme may reposition a zone or repurpose a reserved color/, 'themes should stay inside the fixed zones and reserved encodings');
   assert.match(design, /^## Future Governed Editions$/m, 'design contract should define future edition governance');
   assert.match(design, /same design file[\s\S]+must not expose an edition API/, 'design contract should keep editions governed without a public API');
+});
+
+test('Density system prompt preserves the Modern MCP UX contract', async () => {
+  const prompt = await readFile(path.join(guidanceDir, 'density-system-prompt.md'), 'utf8');
+
+  assert.match(prompt, /Ask one concise question only when an unresolved choice could materially change/);
+  assert.match(prompt, /Bare "utilization" is ambiguous/);
+  assert.match(prompt, /Binary occupancy supports occupied state and occupied time, not a people count/);
+  assert.match(prompt, /Average capacity used is the duration-weighted mean occupancy while occupied/);
+  assert.match(prompt, /Do not apply\s+P10-P90 to every result/);
+  assert.match(prompt, /Critical mass is a user-defined goal/);
+  assert.match(prompt, /Space efficiency has no universal formula/);
+  assert.match(prompt, /Never convert absent data into zero/);
+  assert.match(prompt, /Coverage describes completeness of analytic input\. It does not prove sensor\s+uptime/);
+  assert.match(prompt, /Current lifecycle status must not erase valid historical evidence/);
+  assert.match(prompt, /Preserve an explicit user\s+interval/);
+  assert.match(prompt, /Keep the full query result available/);
+  assert.match(prompt, /displayed and total row counts/);
+  assert.match(prompt, /offer\s+the remaining rows or slides/i);
+  assert.match(prompt, /Do not use a fixed query row limit/);
+  assert.match(prompt, /Plot exact returned values/);
+  assert.match(prompt, /Presentation-only edits reuse evidence/);
+  assert.match(prompt, /Do not add\s+silent caps, thresholds, or automatic rewrites/);
+  assert.match(prompt, /required evidence is unavailable[\s\S]+state the\s+closest truthful result or next useful option/);
 });
 
 test('Density ships the slide orchestration contract with the density skill', async () => {
@@ -145,12 +179,18 @@ test('Density ships the slide orchestration contract with the density skill', as
     path.join(pluginRoot, 'skills', 'density', 'references', 'slide-orchestration.md'),
     'utf8',
   );
-  assert.match(orchestration, /you choose only from named registries/i, 'orchestration contract should pin the probabilistic/deterministic boundary');
-  assert.match(orchestration, /The QA gate.*hard-fails the\s+render/s, 'orchestration contract should make the code gate the authority');
-  assert.match(orchestration, /`product_clean`[\s\S]+`newsprint_mono`/, 'orchestration contract should list the nine named themes');
-  assert.doesNotMatch(orchestration, /institutional/, 'orchestration contract must not list the retired theme');
-  assert.match(orchestration, /`table_graphic`/, 'orchestration contract should map families to archetypes');
-  assert.match(orchestration, /fails the gate twice[\s\S]+answer in chat/, 'orchestration contract should carry the fail-twice-to-chat policy');
+  assert.match(orchestration, /Use `query_db` with the supplied schema resource/i, 'orchestration should use the direct historical query path');
+  assert.match(orchestration, /downstream presentation request/i, 'query_db should keep presentation downstream of execution');
+  assert.match(
+    orchestration,
+    /weekday.*`entity`[\s\S]+local hour.*`time`[\s\S]+percentage.*`measure`/i,
+    'orchestration should declare the canonical weekday-hour heatmap roles',
+  );
+  assert.match(orchestration, /verified projections for bars, line, heatmap,[\s\S]+stacked bars, scatter, slope, range, area, pie, and[\s\S]+donut/i, 'orchestration should advertise all tested direct-query bodies');
+  assert.match(orchestration, /1920×1080 artifact/i, 'orchestration should preserve the governed fixed slide artifact');
+  assert.match(orchestration, /Do not screenshot, re-render, or rebuild an artifact\./, 'orchestration should block artifact fallbacks');
+  assert.doesNotMatch(orchestration, /density\.chart-request\.v1|density_analyze|presentation:/i, 'orchestration should not require the legacy chart route');
+  assert.doesNotMatch(orchestration, /priorAnalysisId|presentationPlan|signed evidence|evidence receipt/i, 'orchestration should not retain receipt-era guidance');
 });
 
 test('Density ships the versioned 25-question acceptance matrix', async () => {
@@ -179,15 +219,13 @@ test('Density ships the versioned 25-question acceptance matrix', async () => {
 
 test('Density skills preserve building lifecycle and go-live analysis rules', async () => {
   const density = await readFile(path.join(skillsDir, 'density', 'SKILL.md'), 'utf8');
-  const utilization = await readFile(path.join(skillsDir, 'utilization', 'SKILL.md'), 'utf8');
+  const systemPrompt = await readFile(path.join(guidanceDir, 'density-system-prompt.md'), 'utf8');
   const wayfinding = await readFile(path.join(skillsDir, 'wayfinding', 'SKILL.md'), 'utf8');
 
   assert.match(density, /available_buildings/, 'parent skill should name the lifecycle readiness tool');
-  assert.match(density, /status\/go-live readiness/, 'parent skill should require status/go-live awareness');
-  assert.match(density, /density\.clarification_request\.v1/, 'parent skill should preserve the formal clarification request kind');
-  assert.match(density, /density\.clarification/, 'parent skill should preserve the formal clarification contract');
-  assert.match(utilization, /chartQueryable/, 'utilization skill should use chart queryability before artifacts');
-  assert.match(utilization, /live, measured, past-go-live scope/, 'utilization skill should require lifecycle-eligible ordinary analytics');
+  assert.match(density, /lifecycle questions/, 'parent skill should route explicit lifecycle work');
+  assert.match(systemPrompt, /Current lifecycle status must not erase valid historical evidence\./, 'system prompt should preserve historical evidence');
+  assert.match(density, /Current status[\s\S]+must not remove spaces with valid historical rows\./, 'parent skill should preserve the lifecycle boundary');
   assert.match(wayfinding, /liveWayfindingEligible/, 'wayfinding skill should require live wayfinding eligibility');
 });
 
@@ -197,7 +235,7 @@ test('Density guidance preserves portable setup, data-health, and live-wayfindin
   const dataHealth = await readFile(path.join(skillsDir, 'data-health', 'SKILL.md'), 'utf8');
   const wayfinding = await readFile(path.join(skillsDir, 'wayfinding', 'SKILL.md'), 'utf8');
 
-  assert.match(density, /30 days/, 'parent skill should describe recent-first 30-day onboarding');
+  assert.match(density, /30-day/, 'parent skill should describe recent-first 30-day onboarding');
   assert.match(setup, /recent-first and still filling in deeper history/, 'setup should preserve background history disclosure');
   assert.match(setup, /- `onboarding_status`/, 'setup should advertise the onboarding status MCP tool');
   assert.match(dataHealth, /state\.json/, 'data-health should preserve CLI sync-state diagnostics');
@@ -207,50 +245,71 @@ test('Density guidance preserves portable setup, data-health, and live-wayfindin
   assert.match(wayfinding, /observed timestamp range/, 'wayfinding should preserve signal freshness display guidance');
 });
 
-test('Density guidance preserves the Prime question runtime contract', async () => {
+test('Density guidance uses the Modern MCP query route', async () => {
   const density = await readFile(path.join(skillsDir, 'density', 'SKILL.md'), 'utf8');
-  const utilization = await readFile(path.join(skillsDir, 'utilization', 'SKILL.md'), 'utf8');
+  const systemPrompt = await readFile(path.join(guidanceDir, 'density-system-prompt.md'), 'utf8');
+  const server = await readFile(path.join(pluginRoot, 'mcp-server', 'server.mjs'), 'utf8');
   const benchmarking = await readFile(path.join(skillsDir, 'benchmarking', 'SKILL.md'), 'utf8');
-  const dataHealth = await readFile(path.join(skillsDir, 'data-health', 'SKILL.md'), 'utf8');
   const setup = await readFile(path.join(skillsDir, 'setup', 'SKILL.md'), 'utf8');
-  const utilizationMethodology = await readFile(path.join(skillsDir, 'utilization', 'references', 'atlas-utilization-methodology.md'), 'utf8');
+  const dataHealth = await readFile(path.join(skillsDir, 'data-health', 'SKILL.md'), 'utf8');
   const benchmarkMethodology = await readFile(path.join(skillsDir, 'benchmarking', 'references', 'darshan-benchmark-methodology.md'), 'utf8');
 
-  assert.match(density, /ordinary Density questions[^\n]+`answer_density_question`/, 'parent skill should make the native front door deterministic');
-  assert.match(density, /`orchestration\.terminal`[\s\S]{0,500}final[\s\S]{0,500}`clarificationAnswer`/, 'parent skill should stop on terminal results and resume clarifications through the front door');
-  assert.match(density, /Do not call another Density tool after a terminal result/i, 'parent skill should prohibit multi-tool recovery after a terminal result');
-  assert.match(density, /Do not fall back to shell, DuckDB, SQL, or hand-built Parquet scans for ordinary questions/i, 'parent skill should prohibit manual fallback for ordinary questions');
-  assert.match(density, /Do not use script fallback for an ordinary question/i, 'parent skill should reserve scripts for setup and debugging');
-  assert.match(density, /zero local quer(?:y|ies), benchmark requests, chart rendering, or artifact writes/i, 'clarification should perform no analytical work');
-  assert.match(density, /delegates scope selection[^\n]+live, measured, and past go-live/i, 'delegated broad scope should select only an eligible scope');
-  assert.match(density, /`mixed_local_benchmark`/, 'parent data boundary should define Mixed provenance');
-  assert.match(density, /full-wall latency[^\n]+routing[^\n]+PNG/i, 'parent skill should define end-to-end latency');
-  assert.match(density, /answer ordinary historical questions immediately from the current local snapshot/i, 'parent skill should preserve immediate local answers');
-  assert.match(density, /local historical[^\n]+never[^\n]+live/i, 'parent skill should keep historical snapshots distinct from live data');
-  assert.match(density, /older than 24 hours[^\n]+at most one[^\n]+background metrics refresh/i, 'parent skill should define the stale snapshot refresh gate');
-  assert.match(density, /refresh failure[^\n]+preserve[^\n]+answer/i, 'parent skill should preserve the answer when refresh fails');
-  assert.match(density, /per-space or unknown[^\n]+never broaden/i, 'parent skill should forbid scope broadening during refresh');
-  assert.match(density, /successful refresh[^\n]+rebuild[^\n]+prepared metrics cache/i, 'parent skill should rebuild the prepared cache after refresh');
-
-  assert.match(utilization, /ordinary natural-language questions[^\n]+`answer_density_question`/, 'utilization should enter through the native front door');
-  assert.match(utilization, /`orchestration\.terminal`[^\n]+final[^\n]+Never start a manual shell, DuckDB, SQL, or Parquet recovery/i, 'utilization should stop after terminal native delivery');
-  assert.match(utilization, /prepared metrics cache/i, 'utilization should describe the prepared cache transparently');
-  assert.match(utilization, /answer ordinary historical questions immediately from the current local snapshot/i, 'utilization should preserve immediate local answers');
-  assert.match(utilization, /older than 24 hours[^\n]+at most one[^\n]+background metrics refresh/i, 'utilization should preserve the stale snapshot refresh gate');
-  assert.match(density, /`analytic_slide`/, 'parent skill should route presentable answers to the analytic slide tool');
-  assert.match(density, /ordinary historical Density questions default to the fixed slide presentation/i, 'parent skill should state the native presentation default');
-  assert.match(density, /`presentation: "broadsheet"`/, 'parent skill should preserve the named Broadsheet variant');
-  assert.match(utilization, /`context_needed`[^\n]+`follow_up_question` verbatim/i, 'utilization should preserve validated analytic confidence handling');
-  assert.match(utilization, /Never re-derive or restate numbers/i, 'utilization should prohibit agent-authored analytic numbers');
-  assert.doesNotMatch(utilization, /5\.8%|1\.9 points|3\.9%/, 'utilization examples should not fabricate customer-looking values');
-  assert.doesNotMatch(density, /["']pick any building["']/i, 'parent guidance should not teach a quoted magic delegation phrase');
-  assert.match(utilization, /copy only the artifact `headline` and `subtitle` exactly[^\n]+end the turn/i, 'utilization should terminate after exact native slide delivery');
-  assert.match(density, /copy only the artifact `headline` and `subtitle` exactly[^\n]+end the turn/i, 'parent skill should terminate after exact native slide delivery');
-  assert.match(utilization, /chart follow-ups[^\n]+`answer_density_question` once[^\n]+reattaches/i, 'utilization should reattach follow-up charts through the native front door');
-  assert.match(utilizationMethodology, /live, measured, and past go-live/i, 'ordinary analytics should use lifecycle-eligible scopes');
-  assert.match(utilizationMethodology, /cache miss[^\n]+canonical local views/i, 'prepared-cache misses should preserve answer semantics');
-  assert.match(utilizationMethodology, /exactly 24 hours[^\n]+fresh/i, 'methodology should preserve the exact freshness boundary');
-  assert.match(utilizationMethodology, /per-space or unknown[^\n]+never broaden/i, 'methodology should prohibit refresh scope broadening');
+  for (const text of [density, systemPrompt]) {
+    assert.match(text, /query_db/, 'guidance should name the direct historical query route');
+    assert.doesNotMatch(text, /density\.chart-request\.v1|density_analyze|outside the intent enum/i, 'guidance should not require the legacy route');
+    assert.match(text, /clarification/, 'guidance should define the clarification path');
+    assert.doesNotMatch(text, /answer_density_question|ask_chart|analytic_slide|priorAnalysisId|presentationPlan|signed evidence/i);
+  }
+  assert.match(systemPrompt, /Bare "utilization" is ambiguous/, 'system prompt should require a qualified utilization metric');
+  assert.match(systemPrompt, /Never convert absent data into zero/, 'system prompt should preserve missing-data meaning');
+  assert.match(systemPrompt, /Keep the full query result available/, 'system prompt should reject hidden data caps');
+  assert.match(systemPrompt, /Presentation-only edits reuse evidence/, 'system prompt should separate presentation changes from evidence changes');
+  assert.match(systemPrompt, /Use model judgment for interpretation, metric choice, clarification, and\s+presentation/, 'system prompt should keep semantic choices model-owned');
+  assert.match(systemPrompt, /runtime owns authorization, customer isolation, read-only[\s\S]+schema validation, and faithful rendering/, 'system prompt should keep trust boundaries deterministic');
+  assert.equal(await exists(path.join(skillsDir, 'utilization')), false, 'historical guidance should not require a separate utilization skill');
+  assert.equal(await exists(path.join(skillsDir, 'density', 'references', 'query-context.md')), false, 'query context should be consolidated into the system prompt and schema');
+  assert.match(density, /canonical[\s\S]+`density` prompt[\s\S]+guidance\/density-system-prompt\.md/, 'parent skill should preserve the canonical prompt fallback');
+  assert.match(density, /Do not search or inspect the global tool inventory/, 'parent skill should skip global tool discovery');
+  assert.match(density, /read_mcp_resource\(\{ server: "density", uri: "density:\/\/schema" \}\)/, 'parent skill should name the direct schema call');
+  assert.match(density, /mcp__density__query_db/, 'parent skill should name the direct historical tool call');
+  assert.match(density, /Read the schema once/, 'parent skill should prevent repeated schema reads');
+  assert.match(density, /Do not read the fallback\s+prompt file during a normal Codex turn/, 'parent skill should prevent redundant prompt reads');
+  assert.match(density, /displayed and\s+total row counts/, 'parent skill should disclose ranked subsets');
+  assert.match(density, /offer\s+the remaining rows or slides/i, 'parent skill should offer omitted ranked results');
+  assert.match(density, /Do not use a silent or\s+fixed query row limit/, 'parent skill should preserve the complete query result');
+  assert.match(density, /user does not request a displayed count[\s\S]+at most 15 rows/, 'parent skill should keep default ranked bars inside the Brief design');
+  for (const text of [density, systemPrompt]) {
+    assert.match(text, /Preserve the (?:user's explicit|requested) scope,[\s\S]+(?:period|window)[\s\S]+population[\s\S]+denominator[\s\S]+aggregation[\s\S]+timezone/, 'guidance should preserve every material evidence dimension');
+    assert.match(text, /unrounded values for/i, 'guidance should use raw values for semantic decisions');
+    assert.match(text, /thresholds|threshold tests/i, 'guidance should use raw values for thresholds');
+    assert.match(text, /ordering/i, 'guidance should use raw values for ordering');
+    assert.match(text, /comparisons/i, 'guidance should use raw values for comparisons');
+    assert.match(text, /Ask before (?:querying|calling `query_db`)[\s\S]+Do not render a\s+chart (?:until|while)/, 'guidance should clarify before querying or rendering');
+    assert.match(text, /exact visualization (?:that )?does not fit the[\s\S]+automatically render the nearest\s+truthful, relevant Brief chart/, 'guidance should make an adjacent Brief chart the primary path');
+    assert.match(text, /Do not reject the chart[\s\S]+ask permission[\s\S]+one deliberate supported choice/, 'guidance should not negotiate a clear presentation request');
+    assert.match(text, /different units, populations,[\s\S]+timezones, denominators[\s\S]+render separate supported\s+Brief charts/, 'guidance should separate incompatible evidence');
+    assert.match(text, /Label each chart[\s\S]+Do not imply that\s+related context directly answers a different question/, 'guidance should label adjacent evidence honestly');
+    assert.match(text, /no truthful,[\s\S]+relevant visualization exists[\s\S]+state the evidence limit/, 'guidance should stop when no truthful chart exists');
+    assert.match(text, /chart fallback cascade[\s\S]+previous renderer/, 'guidance should expose one Brief path without renderer fallbacks');
+    assert.match(text, /rejects the deliberate Brief declaration[\s\S]+stop and state the\s+representation limit[\s\S]+Do not retry another body/, 'guidance should stop after an unexpected renderer rejection');
+  }
+  assert.match(systemPrompt, /one decimal for average occupancy and average time-used labels[\s\S]+whole\s+discrete people, whole rooms, and whole hours[\s\S]+missing values as[\s\S]+missing[\s\S]+Never display them as zero/, 'system prompt should preserve average precision and physical count rules');
+  assert.match(density, /Return raw numeric values from SQL[\s\S]+without rounding them[\s\S]+renderer applies display precision[\s\S]+one decimal for average occupancy and average time-used labels[\s\S]+whole\s+discrete people and whole hours/, 'parent skill should preserve raw averages until display');
+  assert.match(server, /resolve any material ambiguity[\s\S]+nearest truthful, relevant Brief chart[\s\S]+separate Brief charts[\s\S]+Never use the previous renderer or a chart fallback cascade[\s\S]+do not retry another body/, 'render_chart should expose the centralized adjacent-chart contract');
+  assert.match(density, /room question says use, usage, busiest, or utilization[\s\S]+average time-used percentage[\s\S]+not total\s+used hours/, 'parent skill should resolve unqualified room use to utilization percentage');
+  assert.match(density, /complete local calendar days[\s\S]+latest complete\s+local[\s\S]+convert its boundaries to UTC[\s\S]+filter `bucket_start` before aggregation/, 'parent skill should filter large metric histories before local-time calculation');
+  assert.match(density, /canonical `local_date`, `weekday`, and `hour` fields only after the\s+`bucket_start` filter/, 'parent skill should use canonical local fields after the UTC filter');
+  assert.doesNotMatch(density, /round them to whole-number percentages in\s+SQL/, 'parent skill should not discard percentage precision in SQL');
+  assert.match(
+    density,
+    /weekday-hour heatmap[\s\S]+weekday as `entity`[\s\S]+local hour as `time`[\s\S]+percentage as `measure`[\s\S]+Do not use `series`/i,
+    'parent skill should declare canonical weekday-hour heatmap roles without a series',
+  );
+  assert.match(
+    systemPrompt,
+    /weekday-hour heatmap[\s\S]+weekday as `entity`[\s\S]+local hour as `time`[\s\S]+percentage as `measure`[\s\S]+Do not use `series`/i,
+    'system prompt should declare canonical weekday-hour heatmap roles without a series',
+  );
 
   assert.match(benchmarking, /one exact floor/i, 'benchmarking should state exact-floor compatibility');
   assert.match(benchmarking, /single space function/i, 'benchmarking should state single-function compatibility');
@@ -258,22 +317,38 @@ test('Density guidance preserves the Prime question runtime contract', async () 
   assert.match(benchmarkMethodology, /timed out[^\n]+`Local`[^\n]+not `Mixed`/i, 'benchmark timeout should preserve local provenance');
   assert.match(benchmarkMethodology, /local customer metric rows[^\n]+never sent/i, 'benchmark privacy should preserve the local/network boundary');
 
-  assert.match(dataHealth, /prepared metrics cache/i, 'data-health should diagnose the prepared cache');
-  assert.match(dataHealth, /completed all-spaces metrics snapshot[^\n]+older than 24 hours/i, 'data-health should diagnose refresh eligibility');
-  assert.match(dataHealth, /failed refresh[^\n]+preserve[^\n]+answer/i, 'data-health should preserve the stale answer on refresh failure');
-  assert.match(setup, /prepared metrics cache/i, 'setup should build and verify the prepared cache');
-  assert.match(setup, /onboarding background sync[^\n]+distinct from[^\n]+per-question freshness refresh/i, 'setup should distinguish onboarding from per-question refresh');
+  assert.match(setup, /`query_db` is advertised/i, 'setup should verify direct query readiness');
+  assert.match(setup, /recent-first and still filling in deeper history/i, 'setup should distinguish onboarding background sync from immediate readiness');
+
+  assert.match(dataHealth, /For a how-fresh or how-current local-data question, use `local_data_profile` first\./, 'data-health should use local_data_profile for freshness');
+  assert.match(dataHealth, /Use `data_health_report` for missing rows, stale coverage, zero results, sync gaps, and readiness diagnosis\./, 'data-health should reserve data_health_report for diagnosis');
+  assert.match(density, /data-health/, 'parent skill should preserve the local data-health route');
+  assert.match(systemPrompt, /Do not replace the request with a nearby proxy\./, 'system prompt should preserve metric boundaries');
+  assert.match(systemPrompt, /unsupported[\s\S]+capability/, 'system prompt should preserve unsupported-capability boundaries');
 });
 
-test('Density OpenAI skill metadata routes Prime questions consistently', async () => {
+test('Density OpenAI skill metadata advertises the Modern MCP query route', async () => {
   const densityAgent = await readFile(path.join(skillsDir, 'density', 'agents', 'openai.yaml'), 'utf8');
-  const utilizationAgent = await readFile(path.join(skillsDir, 'utilization', 'agents', 'openai.yaml'), 'utf8');
   const benchmarkingAgent = await readFile(path.join(skillsDir, 'benchmarking', 'agents', 'openai.yaml'), 'utf8');
 
-  assert.match(densityAgent, /ordinary Density question/i);
-  assert.match(densityAgent, /front door/i);
-  assert.match(utilizationAgent, /answer a historical utilization question through the Density front door/i);
+  assert.match(densityAgent, /query_db/i);
+  assert.match(densityAgent, /supplied schema and chart context/i);
+  assert.doesNotMatch(densityAgent, /density\.chart-request\.v1|density_analyze|out-of-enum/i);
+  assert.doesNotMatch(densityAgent, /local_utilization_query|starter_questions/i);
   assert.match(benchmarkingAgent, /approved, compatible Density benchmark/i);
+});
+
+test('Only the parent Density skill allows implicit invocation', async () => {
+  for (const skillName of EXPECTED_SKILLS) {
+    const agent = await readFile(path.join(skillsDir, skillName, 'agents', 'openai.yaml'), 'utf8');
+    const expected = skillName === 'density' ? 'true' : 'false';
+
+    assert.match(
+      agent,
+      new RegExp(`allow_implicit_invocation: ${expected}\\b`),
+      `${skillName} must set allow_implicit_invocation to ${expected}`,
+    );
+  }
 });
 
 test('Density MCP server version and tool list match the plugin package', async () => {
@@ -294,8 +369,77 @@ test('Density MCP server version and tool list match the plugin package', async 
     const listed = await client.call('tools/list', {});
     const toolNames = (listed.tools ?? []).map((tool) => tool.name).sort();
     const missingTools = EXPECTED_MCP_TOOLS.filter((tool) => !toolNames.includes(tool));
+    const retiredTools = [
+      'local_utilization_query',
+      'starter_questions',
+    ].filter((tool) => toolNames.includes(tool));
 
     assert.deepEqual(missingTools, [], `MCP tools/list is missing expected tools:\n${missingTools.join('\n')}`);
+    assert.deepEqual(retiredTools, [], `MCP tools/list still exposes retired tools:\n${retiredTools.join('\n')}`);
+    for (const legacyTool of LEGACY_ANALYTICS_TOOLS) {
+      assert.equal(toolNames.includes(legacyTool), false, `${legacyTool} should be hidden from the default model-visible surface`);
+    }
+    assert.equal(toolNames.includes('query_db'), true);
+
+    assert.deepEqual(initialized.capabilities, { tools: {}, prompts: {}, resources: {} });
+    assert.equal(initialized.instructions, undefined);
+    const resources = await client.call('resources/list', {});
+    assert.deepEqual(resources.resources.map((resource) => resource.uri), ['density://schema']);
+  } finally {
+    await client.close();
+  }
+});
+
+test('MCP has no callable legacy analytics route', async () => {
+  const client = await JsonRpcProcess.start({ DENSITY_MCP_EXPOSE_LEGACY_ANALYTICS: '1' });
+  try {
+    await client.call('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'density-legacy-surface-test', version: '1.0.0' },
+    });
+    const listed = await client.call('tools/list', {});
+    const toolNames = (listed.tools ?? []).map((tool) => tool.name);
+    for (const legacyTool of LEGACY_ANALYTICS_TOOLS) {
+      assert.equal(toolNames.includes(legacyTool), false, `${legacyTool} should remain unavailable`);
+      const result = await client.call('tools/call', { name: legacyTool, arguments: {} });
+      assert.match(result.content[0].text, new RegExp(`Unknown tool: ${legacyTool}`));
+    }
+    assert.equal(toolNames.includes('query_db'), true);
+  } finally {
+    await client.close();
+  }
+});
+
+test('MCP exposes one customer schema resource', async () => {
+  const client = await JsonRpcProcess.start();
+
+  try {
+    const resources = await client.call('resources/list', {});
+    assert.deepEqual(resources.resources.map((resource) => resource.uri), ['density://schema']);
+  } finally {
+    await client.close();
+  }
+});
+
+test('MCP exposes the canonical Density prompt without automatic injection', async () => {
+  const client = await JsonRpcProcess.start();
+  try {
+    const initialized = await client.call('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'density-prompt-test', version: '1.0.0' },
+    });
+    assert.deepEqual(initialized.capabilities, { tools: {}, prompts: {}, resources: {} });
+    assert.equal(initialized.instructions, undefined);
+    const listed = await client.call('prompts/list', {});
+    assert.deepEqual(listed.prompts.map((prompt) => prompt.name), ['density']);
+    const prompt = await client.call('prompts/get', {
+      name: 'density',
+      arguments: { question: 'Which rooms were busiest?' },
+    });
+    assert.match(prompt.messages[0].content.text, /^# Density System Prompt$/m);
+    assert.match(prompt.messages[0].content.text, /Which rooms were busiest\?/);
   } finally {
     await client.close();
   }
@@ -344,9 +488,10 @@ function escapeRegExp(value) {
 }
 
 class JsonRpcProcess {
-  static async start() {
+  static async start(env = {}) {
     const child = spawn(process.execPath, ['mcp-server/server.mjs'], {
       cwd: pluginRoot,
+      env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     return new JsonRpcProcess(child);

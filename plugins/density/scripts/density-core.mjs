@@ -16,12 +16,12 @@ import {
   localDataProfileReport,
   managedCliRuntimeStatus,
   missingRequiredCliCapabilities,
+  renderHtmlPreview,
   renderPng,
   resolveDensityCli,
   runDensity,
   safeCliInfo,
   storageReport,
-  supportsAnalyticArtifact,
   which,
 } from './density-lib.mjs';
 
@@ -51,320 +51,73 @@ const SOURCE_BADGES = {
   [SOURCE_LAYERS.liveFeed]: 'Live',
   [SOURCE_LAYERS.cloudSensorHealth]: 'Live',
 };
-const chartContextCache = new Map();
-const pendingThemeElectionCache = new Map();
 
 const oneLine = (value) => String(value ?? '').trim();
 const sourceBadgeFor = (sourceLayer) => SOURCE_BADGES[sourceLayer] ?? 'Mixed';
 const nowIso = () => new Date().toISOString();
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-const resolvePresentation = (value, defaultPresentation) => {
-  const presentation = value ?? defaultPresentation;
-  if (presentation !== 'slide' && presentation !== 'broadsheet') {
-    throw new Error('presentation must be slide or broadsheet.');
-  }
-  return presentation;
+const QUERY_ANALYSIS_FIELDS = ['scope', 'window', 'population', 'metric', 'denominator', 'timezone', 'question'];
+const QUERY_ANALYSIS_STRING_LIMITS = {
+  scope: 500,
+  population: 200,
+  metric: 200,
+  denominator: 300,
+  timezone: 100,
+  question: 2000,
+};
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+const validIsoDate = (value) => {
+  const match = typeof value === 'string' ? ISO_DATE.exec(value) : undefined;
+  if (!match) return false;
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return date.getUTCFullYear() === Number(year)
+    && date.getUTCMonth() === Number(month) - 1
+    && date.getUTCDate() === Number(day);
 };
 
-const HEX_BRAND_ACCENT = /^#[0-9a-fA-F]{6}$/;
-const THEME_VALUE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
-
-const hasExactKeys = (value, keys) => (
-  isRecord(value)
-  && Object.keys(value).length === keys.length
-  && keys.every((key) => Object.hasOwn(value, key))
-);
-
-const themeAliasKey = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-const humanizeThemeValue = (value) => value.split('_').map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`).join(' ');
-
-const validatedThemeVocabulary = (value) => {
-  if (!hasExactKeys(value, ['kind', 'registry', 'presets', 'customBrandAccent'])
-    || value.kind !== 'density.analytic-theme-selections.v1'
-    || !Array.isArray(value.registry)
-    || value.registry.length === 0
-    || !Array.isArray(value.presets)
-    || !hasExactKeys(value.customBrandAccent, ['format'])
-    || value.customBrandAccent.format !== '#RRGGBB') {
-    throw new Error('Density theme list did not match density.analytic-theme-selections.v1.');
+const validateQueryAnalysisString = (field, value) => {
+  if (typeof value !== 'string') throw new Error(`analysis.${field} must be a string.`);
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`analysis.${field} must not be empty.`);
+  if (trimmed.length > QUERY_ANALYSIS_STRING_LIMITS[field]) {
+    throw new Error(`analysis.${field} must be ${QUERY_ANALYSIS_STRING_LIMITS[field]} characters or fewer.`);
   }
-  const registry = value.registry.map((entry) => {
-    if (!hasExactKeys(entry, ['value', 'label'])
-      || typeof entry.value !== 'string'
-      || !THEME_VALUE.test(entry.value)
-      || typeof entry.label !== 'string'
-      || !entry.label.trim()) {
-      throw new Error('Density theme list contained a malformed registry selection.');
+  return value;
+};
+
+export const validateQueryAnalysis = (analysis) => {
+  if (analysis === undefined) return undefined;
+  if (!isRecord(analysis)) throw new Error('analysis must be an object when provided.');
+  const unknownFields = Object.keys(analysis).filter((field) => !QUERY_ANALYSIS_FIELDS.includes(field));
+  if (unknownFields.length > 0) {
+    throw new Error(`analysis contains unsupported field(s): ${unknownFields.join(', ')}.`);
+  }
+
+  const validated = {};
+  for (const field of QUERY_ANALYSIS_FIELDS) {
+    if (field === 'window' || !Object.hasOwn(analysis, field)) continue;
+    validated[field] = validateQueryAnalysisString(field, analysis[field]);
+  }
+  if (Object.hasOwn(analysis, 'window')) {
+    if (!isRecord(analysis.window) || Object.keys(analysis.window).length !== 2
+      || !Object.hasOwn(analysis.window, 'start') || !Object.hasOwn(analysis.window, 'end')) {
+      throw new Error('analysis.window must contain only start and end ISO dates.');
     }
-    return { value: entry.value, label: entry.label.trim() };
-  });
-  const presets = value.presets.map((entry) => {
-    if (!hasExactKeys(entry, ['value', 'accent'])
-      || typeof entry.value !== 'string'
-      || !THEME_VALUE.test(entry.value)
-      || typeof entry.accent !== 'string'
-      || !HEX_BRAND_ACCENT.test(entry.accent)) {
-      throw new Error('Density theme list contained a malformed preset selection.');
+    for (const edge of ['start', 'end']) {
+      if (!validIsoDate(analysis.window[edge])) {
+        throw new Error(`analysis.window.${edge} must be a valid ISO date in YYYY-MM-DD format.`);
+      }
     }
-    return { value: entry.value, accent: entry.accent };
-  });
-  const values = [...registry.map((entry) => entry.value), ...presets.map((entry) => entry.value)];
-  if (new Set(values).size !== values.length) {
-    throw new Error('Density theme list contained duplicate selection values.');
-  }
-  const aliases = new Map();
-  const addAlias = (alias, selection) => {
-    const key = themeAliasKey(alias);
-    if (!key) return;
-    const matches = aliases.get(key) ?? new Set();
-    matches.add(selection);
-    aliases.set(key, matches);
-  };
-  for (const entry of registry) {
-    addAlias(entry.value, entry.value);
-    addAlias(entry.label, entry.value);
-    addAlias(humanizeThemeValue(entry.value), entry.value);
-  }
-  for (const entry of presets) {
-    addAlias(entry.value, entry.value);
-    addAlias(humanizeThemeValue(entry.value), entry.value);
-  }
-  return {
-    registry,
-    presets,
-    values: new Set(values),
-    aliases,
-    customBrandAccent: { format: '#RRGGBB' },
-  };
-};
-
-const themeSelectionForValue = (value, vocabulary) => {
-  if (HEX_BRAND_ACCENT.test(value)) return { brand_accent: value };
-  if (vocabulary.registry.some((entry) => entry.value === value)) return { theme: value };
-  if (vocabulary.presets.some((entry) => entry.value === value)) return { preset: value };
-  return undefined;
-};
-
-const validatedThemePreference = (value, vocabulary) => {
-  if (!hasExactKeys(value, ['kind', 'selected', 'selection', 'value'])
-    || value.kind !== 'density.analytic-theme-preference.v1'
-    || typeof value.selected !== 'boolean') {
-    throw new Error('Density theme preference did not match density.analytic-theme-preference.v1.');
-  }
-  if (value.selected === false) {
-    if (value.selection !== null || value.value !== null) {
-      throw new Error('Density theme preference reported an inconsistent empty selection.');
+    if (analysis.window.start > analysis.window.end) {
+      throw new Error('analysis.window.start must be on or before analysis.window.end.');
     }
-    return { selected: false, selection: null, value: null };
+    validated.window = { start: analysis.window.start, end: analysis.window.end };
   }
-  if (typeof value.value !== 'string') {
-    throw new Error('Density theme preference omitted its selected value.');
-  }
-  const selection = themeSelectionForValue(value.value, vocabulary);
-  if (!selection
-    || !hasExactKeys(value.selection, Object.keys(selection))
-    || value.selection[Object.keys(selection)[0]] !== Object.values(selection)[0]) {
-    throw new Error('Density theme preference contained an unknown or inconsistent selection.');
-  }
-  return { selected: true, selection, value: value.value };
+  return validated;
 };
-
-const themeChoice = (raw, vocabulary, { structured = false } = {}) => {
-  if (raw === undefined || raw === null) return { state: 'missing' };
-  const text = String(raw).trim().replace(/[.!?]+$/, '').trim();
-  if (HEX_BRAND_ACCENT.test(text)) return { state: 'selected', value: text };
-  if (structured) {
-    const value = text.toLowerCase();
-    return vocabulary.values.has(value)
-      ? { state: 'selected', value }
-      : { state: 'invalid' };
-  }
-  const parts = text
-    .replace(/^the\s+/i, '')
-    .replace(/\bthemes?\b/ig, '')
-    .split(/\s*(?:,|\/|\b(?:and|or)\b)\s*/i)
-    .filter(Boolean);
-  const matches = new Set();
-  for (const part of parts) {
-    if (HEX_BRAND_ACCENT.test(part)) {
-      matches.add(part);
-      continue;
-    }
-    for (const match of vocabulary.aliases.get(themeAliasKey(part)) ?? []) matches.add(match);
-  }
-  if (matches.size === 1) return { state: 'selected', value: [...matches][0] };
-  if (matches.size > 1) return { state: 'ambiguous' };
-  return { state: 'invalid' };
-};
-
-const themeAvailabilityIntent = (question) => (
-  /\b(?:what|which|show|list)\b[^?.!]*\bthemes?\b[^?.!]*\b(?:available|options?|choose|choices|have)\b/i.test(question)
-  || /\b(?:available|theme)\s+(?:themes?|options?|choices)\b/i.test(question)
-);
-
-const themeChangeIntent = (question) => (
-  /\b(?:change|switch|set|choose|pick)\b[^?.!]*\b(?:themes?|colou?rs?)\b/i.test(question)
-  || /\b(?:themes?|colou?rs?)\b[^?.!]*\b(?:change|switch|different|another)\b/i.test(question)
-);
-
-const cleanThemeRewrite = (question) => question
-  .replace(/\s+([?.!,;:])/g, '$1')
-  .replace(/\s{2,}/g, ' ')
-  .replace(/^[,;:]\s*|\s*[,;:]$/g, '')
-  .trim();
-
-const embeddedThemeRequest = (question, vocabulary) => {
-  const structuralMatches = [];
-  const explicitPatterns = [
-    /\b(?:change|switch|set)\s+(?:the\s+)?(?:themes?|colou?rs?)\s+(?:to|as|using)\s+([^?.!]+?)(?:\s+themes?)?(?=[?.!]?\s*$)/ig,
-    /\b(?:using|with|in)\s+(?:the\s+)?([^?.!]+)\s+themes?\b/ig,
-  ];
-  for (const pattern of explicitPatterns) {
-    for (const match of question.matchAll(pattern)) {
-      structuralMatches.push({
-        ...themeChoice(match[1], vocabulary),
-        index: match.index,
-        length: match[0].length,
-      });
-    }
-  }
-  const trailingMarker = /\b(?:using|with|in)\s+(?:the\s+)?/ig;
-  for (const match of question.matchAll(trailingMarker)) {
-    const raw = question.slice(match.index + match[0].length).replace(/[?.!]+\s*$/, '').trim();
-    const choice = themeChoice(raw, vocabulary);
-    if (choice.state === 'selected' || choice.state === 'ambiguous') {
-      structuralMatches.push({
-        ...choice,
-        index: match.index,
-        length: question.length - match.index - (question.match(/[?.!]\s*$/)?.[0].length ?? 0),
-      });
-    }
-  }
-  const selected = structuralMatches.sort((left, right) => right.index - left.index)[0];
-  if (selected) {
-    const rewritten = cleanThemeRewrite(`${question.slice(0, selected.index)}${question.slice(selected.index + selected.length)}`);
-    return { state: selected.state, value: selected.value, rewritten, matched: true };
-  }
-  return { state: 'missing', rewritten: question, matched: false };
-};
-
-const isThemeOnlyQuestion = (value) => (
-  !value
-  || /^(?:do|show|render|make)(?:\s+(?:it|that|this))?(?:\s+again)?[?.!]?$/i.test(value)
-);
-
-const themeElectionKey = (dataDir, question) => `${chartContextKey(dataDir)}\0${question}`;
-
-const themeClarificationContract = ({ question, vocabulary, reason }) => ({
-  kind: 'density.clarification_request.v1',
-  contract: 'density.clarification',
-  reason,
-  question,
-  prompt: reason === 'analytic_theme_ambiguous'
-    ? 'I found more than one theme. Which one should I use?'
-    : 'Which slide theme should I use?',
-  requiredChoiceCount: 1,
-  suggestions: [
-    ...vocabulary.registry.map(({ value, label }) => ({ id: value, label })),
-    ...vocabulary.presets.map(({ value, accent }) => ({ id: value, label: humanizeThemeValue(value), accent })),
-  ],
-  freeform: {
-    enabled: true,
-    label: 'Enter a theme choice or a custom brand accent.',
-    format: vocabulary.customBrandAccent.format,
-  },
-  nextActionAfterAnswer: {
-    id: 'answer_density_question',
-    label: 'Apply the selected theme.',
-  },
-  responseSemantics: {
-    answer: false,
-    chart: false,
-    benchmark: false,
-    writesArtifacts: false,
-  },
-});
-
-const themeClarificationResponse = ({ question, dataDir, vocabulary, reason, purpose = 'render_original' }) => {
-  const clarificationRequest = themeClarificationContract({ question, vocabulary, reason });
-  pendingThemeElectionCache.set(themeElectionKey(dataDir, question), { purpose, reason });
-  return {
-    ok: false,
-    ...clarificationRequest,
-    clarificationRequest,
-    intent: 'analytic_theme_selection',
-    message: clarificationRequest.prompt,
-    chartSuppressed: true,
-    dataDir,
-  };
-};
-
-const themeBlockedResponse = ({ question, dataDir, reason, message }) => ({
-  ok: false,
-  blocked: true,
-  reason,
-  question,
-  intent: 'analytic_theme_preference_blocked',
-  message,
-  chartSuppressed: true,
-  dataDir,
-});
-
-const presentationDelivery = ({ requested, slideSupported, response }) => {
-  if (requested !== 'slide') return undefined;
-  let generated = 'none';
-  let delivered = 'none';
-  if (response?.analyticState === 'unsupported_mode') generated = delivered = 'text';
-  else if (response?.panelTarget?.kind === 'analytic-slide' && response?.analytic?.slideFile) generated = 'slide';
-  else if (response?.clarificationRequest) generated = delivered = 'clarification';
-  else if (response?.chart || response?.html || response?.png) generated = delivered = 'chart';
-  else if (response?.ok) generated = delivered = 'text';
-
-  let reason;
-  if (response?.analyticState === 'unsupported_mode') {
-    reason = response.message ?? 'The validated response supports text but not a slide for this question.';
-  } else if (!slideSupported) {
-    reason = 'The installed Density runtime does not advertise validated slide support.';
-  } else if (generated === 'slide') {
-    reason = 'The validated slide was generated and awaits a user-visible host attachment.';
-  } else if (delivered !== 'slide') {
-    reason = 'The validated response did not produce a slide artifact.';
-  }
-  return {
-    requested: 'slide',
-    ...(generated === 'slide' ? { generated } : {}),
-    delivered,
-    slideSupported,
-    ...(reason ? { reason } : {}),
-  };
-};
-
-const createHistoricalQuestionDeadline = (value = 5000) => {
-  const timeoutMs = Number(value);
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new Error('timeoutMs must be a positive number.');
-  }
-  const startedAt = Date.now();
-  const deadlineAt = startedAt + timeoutMs;
-  return {
-    timeoutMs,
-    startedAt,
-    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
-  };
-};
-
-const historicalQuestionTimedOut = ({ question, dataDir, deadline, intent }) => ({
-  ok: false,
-  timedOut: true,
-  question,
-  intent,
-  sourceLayer: SOURCE_LAYERS.localCustomerData,
-  sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
-  message: `Density could not complete this question inside the ${deadline.timeoutMs}ms wall-time budget.`,
-  performance: { elapsedMs: Date.now() - deadline.startedAt, targetMs: deadline.timeoutMs },
-  dataDir,
-});
 
 const readJsonFile = async (file) => {
   try {
@@ -427,169 +180,6 @@ const startBackgroundDeepSync = async ({ dataDir, orgId, days, recentDays }) => 
   return withPid;
 };
 
-const chartContextKey = (dataDir) => path.resolve(dataDir);
-
-const isChartFollowUpQuestion = (question) =>
-  /\b(make|turn|render|chart|graph|visuali[sz]e)\b.*\b(that|this|it|same)\b/i.test(question)
-  || /\b(that|this|it|same)\b.*\b(as a chart|as chart|chart|graph|visuali[sz]e)\b/i.test(question);
-
-const isContextualAnalyticsFollowUp = (question) =>
-  (
-    /\b(?:normaliz(?:e|ed|ing)|normalis(?:e|ed|ing)|average|avg|per day)\b.*\b(?:that|this|it|same)\b/i.test(question)
-    || /\b(?:that|this|it|same)\b.*\b(?:normaliz(?:e|ed|ing)|normalis(?:e|ed|ing)|average|avg|per day)\b/i.test(question)
-    || /\buse\b.+\binstead\b/i.test(question)
-    || /\b(what about|how about)\b/i.test(question)
-    || /\b(?:that|this|it|same)\b.*\b(?:weekday|hour)\b/i.test(question)
-  )
-  && !isChartFollowUpQuestion(question);
-
-const FLOOR_PATTERN = /\b(?:floor|fl|level)\s+([a-z0-9-]+)\b|\b((?:\d+)(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth)\s+floor\b/i;
-const BUILDING_NAME_SOURCE = String.raw`[a-z0-9'’.-]+(?:\s+[a-z0-9'’.-]+){0,2}\s+(?:building|bldg|tower|campus|complex|centre|center|plaza|place)`;
-const BUILDING_REFERENCE_PATTERN = new RegExp(
-  String.raw`\b(?:in|at|on|for|across)\s+(?!(?:the\s+)?(?:first|last|second)\s+place\b)(?:the\s+)?(${BUILDING_NAME_SOURCE})\b`,
-  'i',
-);
-const DAY_NAME_PATTERN = /\b(mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/i;
-const CLOCK_TIME_SOURCE = String.raw`\d{1,2}(?::\d{2})?\s*(?:a|p)?\.?m?\.?`;
-const TIME_RANGE_PATTERN = new RegExp(String.raw`\b(?:(?:from|between|use)\s+)?(${CLOCK_TIME_SOURCE})\s*(?:to|through|until|and|-)\s*(${CLOCK_TIME_SOURCE})\b`, 'i');
-const AFTER_TIME_PATTERN = /\bafter\s+\d{1,2}\s*(?:a|p)\.?m\.?\b/i;
-const DAYPART_PATTERN = /\b(morning|afternoon|evening|around lunch|lunch|working hours|business hours)\b/i;
-
-const cleanSpaces = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
-
-const clockHour = (value) => {
-  const match = String(value ?? '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*([ap])?\.?m?\.?$/i);
-  if (!match) return undefined;
-  let hour = Number(match[1]);
-  const minutes = Number(match[2] ?? 0);
-  const meridiem = match[3]?.toLowerCase();
-  if (minutes > 59 || hour > (meridiem ? 12 : 23)) return undefined;
-  if (meridiem === 'a' && hour === 12) hour = 0;
-  if (meridiem === 'p' && hour < 12) hour += 12;
-  return hour + (minutes / 60);
-};
-
-const requestedOperatingHours = (question) => {
-  const match = String(question ?? '').match(TIME_RANGE_PATTERN);
-  if (!match) return undefined;
-  let start = clockHour(match[1]);
-  let end = clockHour(match[2]);
-  if (start === undefined || end === undefined) return undefined;
-  const endHasMeridiem = /[ap]\.?m?\.?$/i.test(cleanSpaces(match[2]));
-  if (!endHasMeridiem && end <= start && end <= 12) end += 12;
-  if (end <= start || end > 24) return undefined;
-  const label = `${cleanSpaces(match[1]).replace(/\./g, '')}-${cleanSpaces(match[2]).replace(/\./g, '')}`;
-  return { start, end, label, source: 'user_requested' };
-};
-
-const operatingHoursMatch = (actual, requested) => (
-  actual
-  && requested
-  && actual.start === requested.start
-  && actual.end === requested.end
-);
-
-const withoutPriorFloor = (value) => cleanSpaces(
-  value
-    .replace(/\b(?:on|in|for|across)?\s*(?:the\s*)?(?:floor|fl|level)\s+[a-z0-9-]+\b/ig, ' ')
-    .replace(/\b(?:on|in|for|across)?\s*(?:the\s*)?(?:\d+(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth)\s+floor\b/ig, ' ')
-);
-
-const withoutBuildingReference = (value) => cleanSpaces(
-  value.replace(new RegExp(String.raw`\b${BUILDING_NAME_SOURCE}\b`, 'ig'), ' ')
-);
-
-const withoutPriorDayFilter = (value) => cleanSpaces(
-  value.replace(/\b(weekdays?|weekends?|business days?|working days?|work days?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/ig, ' ')
-);
-
-const withoutPriorTimeFilter = (value) => cleanSpaces(
-  value
-    .replace(new RegExp(TIME_RANGE_PATTERN.source, 'ig'), ' ')
-    .replace(/\bafter\s+\d{1,2}\s*(?:a|p)\.?m\.?\b/ig, ' ')
-    .replace(/\b(?:in the\s+)?(?:morning|afternoon|evening)\b/ig, ' ')
-    .replace(/\b(?:around\s+)?lunch\b/ig, ' ')
-    .replace(/\b(?:working|business)\s+hours\b/ig, ' ')
-);
-
-const contextualFilterRewrite = (rewritten, question) => {
-  let next = rewritten;
-  const floorMatch = question.match(FLOOR_PATTERN);
-  if (floorMatch) {
-    next = withoutPriorFloor(next);
-    next = `${next} on ${floorMatch[1] ? `floor ${floorMatch[1]}` : `the ${floorMatch[2]} floor`}`;
-  }
-
-  const buildingMatch = question.match(BUILDING_REFERENCE_PATTERN);
-  if (buildingMatch) {
-    next = withoutBuildingReference(next);
-    next = `${next} in ${buildingMatch[1]}`;
-  }
-
-  const dayNameMatch = question.match(DAY_NAME_PATTERN);
-  if (dayNameMatch) {
-    next = `${withoutPriorDayFilter(next)} on ${dayNameMatch[1]}`;
-  } else if (/\bweekends?\b/i.test(question)) {
-    next = `${withoutPriorDayFilter(next)} on weekends`;
-  } else if (/\b(weekdays?|business days?|working days?|work days?)\b/i.test(question)) {
-    next = `${withoutPriorDayFilter(next)} on weekdays`;
-  }
-
-  const timeRangeMatch = question.match(TIME_RANGE_PATTERN);
-  const afterTimeMatch = question.match(AFTER_TIME_PATTERN);
-  const daypartMatch = question.match(DAYPART_PATTERN);
-  if (timeRangeMatch) {
-    next = `${withoutPriorTimeFilter(next)} from ${cleanSpaces(timeRangeMatch[1])} to ${cleanSpaces(timeRangeMatch[2])}`;
-  } else if (afterTimeMatch) {
-    next = `${withoutPriorTimeFilter(next)} ${afterTimeMatch[0]}`;
-  } else if (daypartMatch) {
-    next = `${withoutPriorTimeFilter(next)} during ${daypartMatch[1]}`;
-  }
-
-  return cleanSpaces(next);
-};
-
-const rewriteContextualQuestion = (question, prior) => {
-  if (!prior?.question) return question;
-  let rewritten = prior.question;
-  if (/\b(?:by|across)\s+weekdays?\s+(?:and|by)\s+hours?\b/i.test(question)) {
-    return cleanSpaces(`${withoutPriorDayFilter(rewritten)} by weekday and hour`);
-  }
-  if (/\b(phone booths?|booths?)\b/i.test(question)) {
-    rewritten = rewritten.replace(/\b(conference|meeting)\s+rooms?\b/ig, 'phone booths');
-    rewritten = rewritten.replace(/\brooms?\b/ig, 'phone booths');
-    rewritten = rewritten.replace(/\bphone booths\s+(size|capacity|capacities|seat|seats)\b/ig, 'phone booth $1');
-    if (!/\b(phone booths?|booths?)\b/i.test(rewritten)) rewritten = `${rewritten} for phone booths`;
-  } else if (/\b(conference|meeting)\s+rooms?\b/i.test(question)) {
-    rewritten = rewritten.replace(/\bphone booths?\b/ig, 'meeting rooms');
-    if (!/\b(conference|meeting)\s+rooms?\b/i.test(rewritten)) rewritten = `${rewritten} for meeting rooms`;
-  }
-  if (/\b(normaliz(?:e|ed|ing)|normalis(?:e|ed|ing)|average|avg|per day)\b/i.test(question)
-    && !/\b(normaliz(?:e|ed|ing)|normalis(?:e|ed|ing)|average|avg|per day)\b/i.test(rewritten)) {
-    rewritten = `${rewritten} average occupied hours per day`;
-  }
-  return contextualFilterRewrite(rewritten, question);
-};
-
-const cleanCoverageValue = (value) => {
-  const text = String(value ?? '').trim();
-  return text && text.toLowerCase() !== 'null' ? text : undefined;
-};
-
-const dataCoverageIntent = (question) =>
-  /\b(what data do we have|which data do we have|what local historical data|local historical data available|available local data|local data profile|data coverage|coverage report|readiness|ready to answer|storage report)\b/i.test(question);
-
-const broadScopeSelectionIntent = (question) => (
-  /\b(any one|any 1|pick (?:one|a)|choose (?:one|a)|select (?:one|a)|one (?:of|building|site|office|location))\b/i.test(question)
-  && LOCATION_SCOPE_PATTERN.test(question)
-);
-
-const noMatchingLocalScope = ({ scopeResolution } = {}) => scopeResolution === 'no_match';
-
-const dataHealthIntent = (question) =>
-  dataCoverageIntent(question)
-  || /\b(can (?:we|i) trust|trustworthy|diagnos(?:e|is|tic)|data[-\s]?health|why (?:is|are).*(?:missing|stale)|(?:data|metrics?|rows?|charts?).*zeros?|zeros?.*(?:data|metrics?|rows?|charts?)|stale (?:data|cache|local data)|missing (?:data|metrics|rows)|fresh(?:ness)? of (?:the )?(?:data|cache|local data)|is (?:the )?(?:data|cache|local data).*(?:fresh|stale|ready)|sync gaps?|data gaps?)\b/i.test(question);
-
 const sensorSubjectIntent = (question) =>
   /\b(sensor(?:s)?|sensor[-\s]?health|live signal|presence signal|health of (?:the )?sensor|signal stale|stale signal)\b/i.test(question);
 
@@ -601,85 +191,6 @@ const sensorHealthIntent = (question) => {
   if (historicalSensorUtilizationIntent(question)) return false;
   const healthOrStatus = /\b(health|healthy|unhealthy|status|online|offline|error|errors|unconfigured|heartbeat|heartbeats|reporting|stale|degraded|mapping|mapped|attention|operational readiness|live signal|presence signal)\b/i.test(question);
   return sensorSubjectIntent(question) && healthOrStatus;
-};
-
-const metadataQuestionIntent = (question) => {
-  const lifecycleEntity = /\b(buildings?|sites?|offices?|locations?)\b/i.test(question);
-  const lifecycleState = /\b(live|offline|planning|planned|inactive|retired|decommissioned|pre[-\s]?live|go[-\s]?live|lifecycle|status)\b/i.test(question);
-  const currentSpaceState = /\b(availability|available|open|free|empty|vacant|occupied)\b/i.test(question)
-    && /\b(rooms?|phone booths?|booths?|desks?|seats?|spaces?)\b/i.test(question);
-  if (lifecycleEntity && lifecycleState && !currentSpaceState) return 'building_lifecycle';
-
-  const structureEntity = /\b(buildings?|sites?|floors?|spaces?|rooms?|meeting rooms?|conference rooms?|phone booths?|booths?|desks?)\b/i.test(question);
-  const historicalPerformanceCount = /\b(historical|history|trend|over time|last|past|yesterday|weekdays?|weekends?|weeks?|months?|quarters?|years?|us(?:e|ed|age)|occupied|occupancy|utili[sz](?:e|ed|ation)|performance|busiest|least used|underused)\b/i.test(question)
-    || /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i.test(question)
-    || /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(question);
-  const structureRepresentation = /\b(represented|inventory)\b/i.test(question);
-  const structureCount = structureEntity
-    && (/\bhow many\b/i.test(question)
-      || /\b(?:total )?(?:count|number) of\b/i.test(question)
-      || /\bcount (?:the )?(?:buildings?|sites?|floors?|spaces?|rooms?|meeting rooms?|conference rooms?|phone booths?|booths?|desks?)\b/i.test(question))
-    && (structureRepresentation || !/\b(availability|available|open|free|empty|vacant)\b/i.test(question))
-    && !historicalPerformanceCount;
-  if (structureCount) return 'local_structure';
-
-  const diagnostic = /\b(can (?:we|i) trust|trustworthy|diagnos(?:e|is|tic)|why (?:is|are)|zeros?|missing|gaps?)\b/i.test(question);
-  const freshnessSubject = /\b(data|metrics?|dataset|cache|parquet|sync|synced|refresh|refreshed|update|updated)\b/i.test(question);
-  const freshness = freshnessSubject && (
-    /\bhow fresh\b/i.test(question)
-    || /\bwhen (?:was|were|did).*(?:last )?(?:sync|synced|refresh|refreshed|update|updated)\b/i.test(question)
-    || /\b(?:last|latest) (?:sync|synced|refresh|refreshed|update|updated)\b/i.test(question)
-  );
-  if (freshness && !diagnostic) return 'local_data_freshness';
-
-  return undefined;
-};
-
-const metadataQuestionRouting = (intent) => intent
-  ? {
-      fromTool: 'local_utilization_query',
-      routedTool: 'local_utilization_query',
-      intent,
-      reason: {
-        building_lifecycle: 'Question asked which buildings or sites match a lifecycle state, so local lifecycle metadata was used instead of live room availability.',
-        local_structure: 'Question asked for an inventory count, so local structure metadata was used instead of historical utilization.',
-        local_data_freshness: 'Question asked when local data was last observed or synced, so the local metadata chart path was used instead of a diagnostic health report.',
-      }[intent],
-    }
-  : undefined;
-
-const LOCATION_SCOPE_PATTERN = /\b(buildings?|sites?|offices?|locations?)\b/i;
-const AVAILABILITY_SUBJECT_PATTERN = /\b(people|persons?|occupants?|meeting rooms?|conference rooms?|rooms?|phone booths?|booths?|desks?|seats?|spaces?|floors?|where|wayfinding)\b/i;
-
-const historicalAvailabilityIntent = (question) =>
-  DAY_NAME_PATTERN.test(question)
-  || /\b(how often|frequency|percent|percentage|share of time|historical|history|trend|over time|last|past|weekday|weekend|rank(?:ing)?|popular|busiest|least used|most occupied|least occupied|utili[sz]ation|used hours?|average|avg|observed|measured)\b/i.test(question);
-
-const availabilityScopeIntent = (question) =>
-  AVAILABILITY_SUBJECT_PATTERN.test(question) || LOCATION_SCOPE_PATTERN.test(question);
-
-const currentAvailabilityIntent = (question) => {
-  if (/\b(local historical data|available local data|what data do we have)\b/i.test(question)) return false;
-  const availabilityText = question.replace(/\bopen collaboration spaces?\b/ig, 'collaboration spaces');
-  const liveWord = /\b(now|right now|currently|current|live|real[-\s]?time|wayfinding)\b/i.test(question);
-  const availabilityWord = /\b(available|availability|open|occupied|free|empty|vacant|people|persons?|occupants?)\b/i.test(availabilityText);
-  const scoped = availabilityScopeIntent(question);
-  if (liveWord && (availabilityWord || scoped)) return true;
-  if (/\b(?:available|open|occupied|free|empty|vacant)\s+now\b/i.test(availabilityText)) return true;
-  if (historicalAvailabilityIntent(question)) return false;
-  return (
-    /\bfind\s+(?:me\s+)?(?:an?\s+)?(?:open|available|free|empty|vacant)\b/i.test(availabilityText)
-    || (availabilityWord && scoped)
-  );
-};
-
-const floorplanArtifactIntent = (question) => {
-  if (/\bfloor\s*plans?\b|\bfloorplans?\b/i.test(question)) return true;
-  if (/\bheat\s*map\b/i.test(question) && /\b(weekday|weekdays|day|days|hour|hours|time)\b/i.test(question)) return false;
-  const spatialScope = /\b(floors?|levels?|rooms?|spaces?|desks?|booths?|availability|usage|utili[sz]ation|occupancy)\b/i.test(question);
-  return (spatialScope && /\b(map|overlay|spatial|wayfind(?:ing)?|navigate|route)\b/i.test(question))
-    || (spatialScope && /\bheat\s*map\b/i.test(question))
-    || (/\b(show|visuali[sz]e|color|shade|draw|plot)\b/i.test(question) && /\b(on|onto|over)\s+(?:the\s+)?floor\b/i.test(question));
 };
 
 const floorplanRouteResponse = ({ question, dataDir, liveIntent = false }) => ({
@@ -751,324 +262,12 @@ const compactWayfindingSummary = (parsed) => {
   };
 };
 
-const rememberChartContext = (dataDir, result) => {
-  if (!result?.ok) return;
-  chartContextCache.set(chartContextKey(dataDir), {
-    question: result.question,
-    title: result.title,
-    subtitle: result.subtitle,
-    chart: result.chart,
-    html: result.html,
-    png: result.png,
-    effectiveScope: result.effectiveScope,
-    freshness: result.freshness,
-    confidence: result.confidence,
-    caveats: result.caveats,
-    sourceLayer: result.sourceLayer,
-    sourceBadge: result.sourceBadge,
-    provenance: result.provenance,
-  });
-};
-
-const readChartContext = (dataDir) => chartContextCache.get(chartContextKey(dataDir));
-
-const broadScopeClarificationContract = (question) => ({
-  kind: 'density.clarification_request.v1',
-  contract: 'density.clarification',
-  reason: 'broad_scope_needs_resolution',
-  question,
-  prompt: 'Which measured building should I use?',
-  requiredChoiceCount: 1,
-  suggestions: [
-    {
-      id: 'list_measured_buildings',
-      label: 'Show the measured buildings I can choose from.',
-    },
-    {
-      id: 'choose_measured_building',
-      label: 'Use a specific measured building.',
-    },
-  ],
-  freeform: {
-    enabled: true,
-    label: 'Name a measured building, floor, space type, or time window.',
-  },
-  nextActionAfterAnswer: {
-    id: 'answer_density_question',
-    label: 'Answer the question with the selected measured scope.',
-  },
-  responseSemantics: {
-    answer: false,
-    chart: false,
-    benchmark: false,
-    writesArtifacts: false,
-  },
-});
-
 const parseJsonOutput = (stdout, label) => {
   try {
     return JSON.parse(stdout);
   } catch (error) {
     throw new Error(`${label} was not JSON: ${error.message}`);
   }
-};
-
-const runThemeJsonCommand = async ({ cli, args, dataDir, timeoutMs, label }) => {
-  const result = await runDensity(cli, args, {
-    dataDir,
-    allowFailure: true,
-    timeoutMs: Math.max(1, timeoutMs),
-  });
-  if (result.code !== 0 || result.timedOut) {
-    throw new Error(result.timedOut
-      ? `${label} timed out.`
-      : oneLine(result.stderr || result.stdout) || `${label} failed.`);
-  }
-  return parseJsonOutput(result.stdout, label);
-};
-
-const loadThemeState = async ({ cli, dataDir, capabilities, remainingMs }) => {
-  if (capabilities?.commands?.analyticThemePreference !== true) {
-    return {
-      ok: false,
-      reason: 'analytic_theme_preference_unsupported',
-      message: 'The installed Density runtime does not support analytic theme preference commands.',
-    };
-  }
-  try {
-    const timeoutMs = remainingMs();
-    const [listPayload, preferencePayload] = await Promise.all([
-      runThemeJsonCommand({
-        cli,
-        args: ['theme', 'list'],
-        dataDir,
-        timeoutMs,
-        label: 'Density theme list',
-      }),
-      runThemeJsonCommand({
-        cli,
-        args: ['theme', 'get'],
-        dataDir,
-        timeoutMs,
-        label: 'Density theme preference',
-      }),
-    ]);
-    const vocabulary = validatedThemeVocabulary(listPayload);
-    const preference = validatedThemePreference(preferencePayload, vocabulary);
-    return { ok: true, vocabulary, preference };
-  } catch (error) {
-    return {
-      ok: false,
-      reason: 'analytic_theme_contract_invalid',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-};
-
-const setThemePreference = async ({ cli, dataDir, vocabulary, value, remainingMs }) => {
-  let payload;
-  try {
-    payload = await runThemeJsonCommand({
-      cli,
-      args: ['theme', 'set', value],
-      dataDir,
-      timeoutMs: remainingMs(),
-      label: 'Density theme preference update',
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      reason: 'analytic_theme_preference_write_failed',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  try {
-    const preference = validatedThemePreference(payload, vocabulary);
-    if (!preference.selected || preference.value !== value) {
-      throw new Error('Density theme preference update returned a different selection.');
-    }
-    return { ok: true, preference };
-  } catch (error) {
-    return {
-      ok: false,
-      reason: 'analytic_theme_preference_write_failed',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-};
-
-const themePreferenceUpdatedResponse = ({ question, dataDir, value }) => ({
-  ok: true,
-  question,
-  dataDir,
-  intent: 'analytic_theme_preference_updated',
-  message: `Saved ${value} as the default analytic theme.`,
-  themePreference: { selected: true, value },
-  chartSuppressed: true,
-});
-
-const themeFollowUpNeedsQuestion = ({ question, dataDir }) => {
-  const clarificationRequest = {
-    kind: 'density.clarification_request.v1',
-    contract: 'density.clarification',
-    reason: 'analytic_theme_follow_up_needs_question',
-    question,
-    prompt: 'Which analytic question should I render in that theme?',
-    requiredChoiceCount: 1,
-    suggestions: [],
-    freeform: { enabled: true, label: 'Enter the analytic question to render.' },
-    nextActionAfterAnswer: { id: 'answer_density_question', label: 'Render the selected analytic question.' },
-    responseSemantics: { answer: false, chart: false, benchmark: false, writesArtifacts: false },
-  };
-  return {
-    ok: false,
-    ...clarificationRequest,
-    clarificationRequest,
-    intent: 'analytic_theme_follow_up_needs_question',
-    message: clarificationRequest.prompt,
-    chartSuppressed: true,
-    dataDir,
-  };
-};
-
-const prepareAnalyticThemeRequest = async ({
-  question,
-  dataDir,
-  cli,
-  capabilities,
-  remainingMs,
-  explicitTheme,
-  clarificationAnswer,
-  priorChart,
-}) => {
-  const loaded = await loadThemeState({ cli, dataDir, capabilities, remainingMs });
-  if (!loaded.ok) {
-    return {
-      state: 'response',
-      response: themeBlockedResponse({ question, dataDir, reason: loaded.reason, message: loaded.message }),
-    };
-  }
-  const { vocabulary, preference } = loaded;
-  const key = themeElectionKey(dataDir, question);
-  const pending = clarificationAnswer ? pendingThemeElectionCache.get(key) : undefined;
-  if (pending) {
-    const choice = themeChoice(clarificationAnswer, vocabulary);
-    if (choice.state !== 'selected') {
-      return {
-        state: 'response',
-        response: themeClarificationResponse({
-          question,
-          dataDir,
-          vocabulary,
-          reason: pending.reason,
-          purpose: pending.purpose,
-        }),
-      };
-    }
-    const saved = await setThemePreference({ cli, dataDir, vocabulary, value: choice.value, remainingMs });
-    if (!saved.ok) {
-      return {
-        state: 'response',
-        response: themeBlockedResponse({ question, dataDir, reason: saved.reason, message: saved.message }),
-      };
-    }
-    pendingThemeElectionCache.delete(key);
-    if (pending.purpose === 'preference_only') {
-      return { state: 'response', response: themePreferenceUpdatedResponse({ question, dataDir, value: choice.value }) };
-    }
-    return { state: 'proceed', question, theme: choice.value, clarificationConsumed: true };
-  }
-
-  if (explicitTheme !== undefined && explicitTheme !== null) {
-    const choice = themeChoice(explicitTheme, vocabulary, { structured: true });
-    if (choice.state !== 'selected') {
-      throw new Error('theme must match a value returned by density theme list, or a six-digit hex brand accent.');
-    }
-    pendingThemeElectionCache.delete(key);
-    return { state: 'proceed', question, theme: choice.value, clarificationConsumed: false };
-  }
-
-  const availability = themeAvailabilityIntent(question);
-  const change = themeChangeIntent(question);
-  const embedded = embeddedThemeRequest(question, vocabulary);
-  if (embedded.state === 'ambiguous' || (embedded.matched && embedded.state === 'invalid')) {
-    return {
-      state: 'response',
-      response: themeClarificationResponse({
-        question,
-        dataDir,
-        vocabulary,
-        reason: embedded.state === 'ambiguous' ? 'analytic_theme_ambiguous' : 'analytic_theme_selection_required',
-      }),
-    };
-  }
-  if ((availability || change) && embedded.state !== 'selected') {
-    return {
-      state: 'response',
-      response: themeClarificationResponse({
-        question,
-        dataDir,
-        vocabulary,
-        reason: 'analytic_theme_change_requested',
-        purpose: 'preference_only',
-      }),
-    };
-  }
-  if (embedded.state === 'selected') {
-    const saved = await setThemePreference({ cli, dataDir, vocabulary, value: embedded.value, remainingMs });
-    if (!saved.ok) {
-      return {
-        state: 'response',
-        response: themeBlockedResponse({ question, dataDir, reason: saved.reason, message: saved.message }),
-      };
-    }
-    pendingThemeElectionCache.delete(key);
-    if (change && isThemeOnlyQuestion(embedded.rewritten)) {
-      return { state: 'response', response: themePreferenceUpdatedResponse({ question, dataDir, value: embedded.value }) };
-    }
-    if (isThemeOnlyQuestion(embedded.rewritten)) {
-      if (!priorChart?.question) {
-        return { state: 'response', response: themeFollowUpNeedsQuestion({ question, dataDir }) };
-      }
-      return {
-        state: 'proceed',
-        question: priorChart.question,
-        theme: embedded.value,
-        clarificationConsumed: false,
-        followUp: {
-          type: 'theme_only_rerender',
-          previousQuestion: priorChart.question,
-          effectiveQuestion: priorChart.question,
-          reason: 'The request changed only the theme, so the plugin reused the prior analytic question.',
-        },
-      };
-    }
-    return {
-      state: 'proceed',
-      question: embedded.rewritten,
-      theme: embedded.value,
-      clarificationConsumed: false,
-      followUp: embedded.rewritten !== question
-        ? {
-            type: 'rewrite_theme_reference',
-            effectiveQuestion: embedded.rewritten,
-            reason: 'The plugin removed the theme phrase before scope matching and applied the selected theme separately.',
-          }
-        : undefined,
-    };
-  }
-  if (!preference.selected) {
-    return {
-      state: 'response',
-      response: themeClarificationResponse({
-        question,
-        dataDir,
-        vocabulary,
-        reason: 'analytic_theme_selection_required',
-      }),
-    };
-  }
-  return { state: 'proceed', question, clarificationConsumed: false };
 };
 
 const validatedQuestionUiSource = (answerProps) => {
@@ -1138,27 +337,13 @@ const questionUiProvenance = ({ dataDir, tool, sourceLayer, sourceBadge, sourceL
   return { sourceLayer, sourceBadge, sourceLabel, tool, freshness, caveat };
 };
 
-const parseQuestionUiAnswer = async ({
-  question,
-  dataDir,
-  cli,
-  result,
-  tool,
-  renderTimeoutMs,
-  remember = true,
-  analyticArtifactSupported = false,
-  analyticCapabilities,
-  includePanelTarget = false,
-}) => {
-  let ui;
-  try {
-    ui = JSON.parse(result.stdout);
-  } catch (error) {
-    throw new Error(`Density UI response was not JSON: ${error.message}`);
-  }
+const parseQuestionUiAnswer = async ({ question, dataDir, cli, result, tool, renderTimeoutMs }) => {
+  const ui = parseJsonOutput(result.stdout, 'Density UI response');
   if (ui?.clarificationRequest !== undefined) {
-    const clarificationRequest = publicClarificationRequest(ui.clarificationRequest);
-    if (!clarificationRequest) {
+    const clarificationRequest = ui.clarificationRequest;
+    if (!isRecord(clarificationRequest)
+      || clarificationRequest.kind !== 'density.clarification_request.v1'
+      || clarificationRequest.contract !== 'density.clarification') {
       throw new Error('Density UI clarificationRequest did not match the density.clarification contract.');
     }
     return {
@@ -1169,79 +354,24 @@ const parseQuestionUiAnswer = async ({
       sourceLayer: SOURCE_LAYERS.localCustomerData,
       sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
       provenance: localHistoricalProvenance({ dataDir, tool }),
-      chart: undefined,
-      html: undefined,
-      png: undefined,
       chartSuppressed: true,
       dataDir,
       cli: safeCliInfo(cli),
     };
   }
-  const normalizedAnalytic = analyticArtifactSupported
-    ? await normalizeAnalyticPayload({
-        analytic: ui.analytic,
-        panelTarget: includePanelTarget ? ui.panelTarget : undefined,
-        runtimeArtifact: isRecord(ui.artifact) ? ui.artifact : ui.artifacts,
-        question,
-        requestedMode: includePanelTarget ? 'slide' : undefined,
-        capabilities: analyticCapabilities,
-      })
-    : { ok: true, analytic: undefined, panelTarget: undefined };
-  if (!normalizedAnalytic.ok) throw new Error(normalizedAnalytic.reason);
+
   const answerProps = ui.jsonRender?.spec?.elements?.answer?.props ?? {};
   const state = ui.jsonRender?.spec?.state ?? {};
   const source = validatedQuestionUiSource(answerProps);
   const snapshot = publicQuestionSnapshot(ui.snapshot);
-  const {
-    snapshot: _privateSnapshot,
-    analytic: _privateAnalytic,
-    panelTarget: _privatePanelTarget,
-    ...uiWithoutPrivatePayloads
-  } = ui;
-  const svg = ui.artifacts?.svg ?? state.artifacts?.svg;
+  const { snapshot: _privateSnapshot, analytic: _legacyAnalytic, panelTarget: _legacyPanelTarget, ...publicUi } = ui;
+  const chart = ui.artifacts?.svg ?? state.artifacts?.svg;
   const html = ui.artifacts?.html ?? state.artifacts?.html;
   const pngStartedAt = Date.now();
-  const png = normalizedAnalytic.unsupportedMode
-    ? undefined
-    : await renderPng(svg, { timeoutMs: renderTimeoutMs });
-  const pngMs = normalizedAnalytic.unsupportedMode ? 0 : Date.now() - pngStartedAt;
-  const analytic = normalizedAnalytic.analytic;
-  const panelTarget = normalizedAnalytic.panelTarget;
-  const analyticElement = uiWithoutPrivatePayloads.jsonRender?.spec?.elements?.analytic;
-  const answerElement = uiWithoutPrivatePayloads.jsonRender?.spec?.elements?.answer;
-  const analyticOwnsPresentation = analytic !== undefined
-    && ['context_needed', 'blocked'].includes(analytic.artifact.confidence)
-    && analytic.artifact.chart_data === null;
-  const publicUi = {
-    ...uiWithoutPrivatePayloads,
-    ...(isRecord(uiWithoutPrivatePayloads.jsonRender)
-      && isRecord(uiWithoutPrivatePayloads.jsonRender.spec)
-      && isRecord(uiWithoutPrivatePayloads.jsonRender.spec.elements)
-      ? {
-          jsonRender: {
-            ...uiWithoutPrivatePayloads.jsonRender,
-            spec: {
-              ...uiWithoutPrivatePayloads.jsonRender.spec,
-              elements: {
-                ...uiWithoutPrivatePayloads.jsonRender.spec.elements,
-                ...(isRecord(analyticElement)
-                  ? analytic
-                    ? { analytic: { ...analyticElement, props: analytic } }
-                    : { analytic: { ...analyticElement, props: {} } }
-                  : {}),
-                ...(analyticOwnsPresentation && isRecord(answerElement)
-                  ? { answer: { ...answerElement, children: ['analytic'] } }
-                  : {}),
-              },
-            },
-          },
-        }
-      : {}),
-    ...(panelTarget ? { panelTarget } : {}),
-    ...(snapshot ? { snapshot } : {}),
-  };
-  const response = {
-    ok: normalizedAnalytic.unsupportedMode ? false : true,
+  const png = await renderPng(chart, { timeoutMs: renderTimeoutMs });
+
+  return {
+    ok: true,
     ...source,
     provenance: questionUiProvenance({
       dataDir,
@@ -1253,7 +383,7 @@ const parseQuestionUiAnswer = async ({
     scopeResolution: answerProps.scopeResolution ?? state.scopeResolution,
     title: answerProps.title ?? '',
     subtitle: answerProps.subtitle ?? '',
-    chart: svg,
+    chart,
     html,
     png,
     cache: ui.cache,
@@ -1265,87 +395,13 @@ const parseQuestionUiAnswer = async ({
     benchmark: answerProps.benchmark ?? state.benchmark,
     sensorHealth: state.sensorHealth,
     snapshot,
-    performance: { ...(ui.performance ?? {}), pngMs },
-    ...(analytic ? { analytic } : {}),
-    ...(panelTarget ? { panelTarget } : {}),
-    ...(normalizedAnalytic.trustContext ? { trustContext: normalizedAnalytic.trustContext } : {}),
-    ...(normalizedAnalytic.analyticState ? { analyticState: normalizedAnalytic.analyticState } : {}),
-    ...(normalizedAnalytic.unsupportedMode ? {
-      unsupportedMode: true,
-      deliveredMode: 'text',
-      message: 'Density returned a validated text answer, but this question does not currently support a slide.',
-    } : {}),
-    ...(normalizedAnalytic.learningRecordId ? { learningRecordId: normalizedAnalytic.learningRecordId } : {}),
-    ...(normalizedAnalytic.learningWarning ? { learningWarning: normalizedAnalytic.learningWarning } : {}),
-    ...(normalizedAnalytic.reviewNextAction ? { reviewNextAction: { ...normalizedAnalytic.reviewNextAction, args: { ...normalizedAnalytic.reviewNextAction.args, dataDir } } } : {}),
-    ui: publicUi,
+    performance: { ...(ui.performance ?? {}), pngMs: Date.now() - pngStartedAt },
+    ui: { ...publicUi, ...(snapshot ? { snapshot } : {}) },
     dataDir,
     cli: safeCliInfo(cli),
   };
-  if (broadScopeSelectionIntent(question) && noMatchingLocalScope(response)) {
-    const clarification = broadScopeClarificationContract(question);
-    return {
-      ...response,
-      ok: false,
-      ...clarification,
-      intent: 'broad_scope_needs_resolution',
-      title: 'I need a measured building scope',
-      subtitle: 'The local question layer could not safely choose a building from that broad prompt, so this should not turn into manual DuckDB or Parquet work.',
-      message: 'Ask for the available measured buildings, or name the building to compare.',
-      chart: undefined,
-      html: undefined,
-      png: undefined,
-      chartSuppressed: true,
-      nextAction: {
-        id: 'clarify_measured_building_scope',
-        label: 'Ask which building to use, or ask what measured buildings are available.',
-      },
-      nextSteps: [
-        'Ask which building to use, or ask what measured buildings are available.',
-      ],
-      recovery: {
-        reason: 'Broad scope selection failed inside the local question layer.',
-        preferredTool: 'answer_density_question',
-        avoid: ['shell', 'DuckDB', 'SQL', 'manual Parquet scans', 'hand-built chart scripts'],
-      },
-    };
-  }
-  if (remember) rememberChartContext(dataDir, response);
-  return response;
 };
 
-const verifiedRegularFile = async (file, expectedSha256) => {
-  if (typeof file !== 'string' || !file.trim() || typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expectedSha256)) return false;
-  try {
-    const [details, contents] = await Promise.all([stat(file), readFile(file)]);
-    return details.isFile()
-      && details.size > 0
-      && createHash('sha256').update(contents).digest('hex') === expectedSha256;
-  } catch {
-    return false;
-  }
-};
-
-const cachedQuestionUiIsUsable = async (result) => {
-  if (result.code !== 0) return false;
-  try {
-    const ui = JSON.parse(result.stdout);
-    if (ui.cache?.hit !== true) return true;
-    const state = ui.jsonRender?.spec?.state ?? {};
-    const svg = ui.artifacts?.svg ?? state.artifacts?.svg;
-    const html = ui.artifacts?.html ?? state.artifacts?.html;
-    if (ui.cache?.type === 'prepared_metrics' && !svg && !html) return true;
-    const svgSha256 = ui.artifacts?.svgSha256 ?? state.artifacts?.svgSha256;
-    const htmlSha256 = ui.artifacts?.htmlSha256 ?? state.artifacts?.htmlSha256;
-    const [svgUsable, htmlUsable] = await Promise.all([
-      verifiedRegularFile(svg, svgSha256),
-      verifiedRegularFile(html, htmlSha256),
-    ]);
-    return svgUsable && htmlUsable;
-  } catch {
-    return false;
-  }
-};
 
 const addCheck = (checks, name, ok, detail, extra = {}) => {
   checks.push({ name, ok, detail, ...extra });
@@ -1386,6 +442,27 @@ const starterReadyDetail = (starterCache, fallbackCount) => {
     return `${count} answers ready; ${cacheState}; 0 nonzero utilization answers. Local data may be empty or missing space metadata.`;
   }
   return `${count} answers ready; ${cacheState}`;
+};
+
+const publicCliCapabilities = (capabilities = {}) => {
+  const {
+    chartQuestions: _chartQuestions,
+    questionAnswering: _questionAnswering,
+    commands,
+    ...rest
+  } = capabilities;
+  const {
+    askChart: _askChart,
+    questionUi: _questionUi,
+    questionStarter: _questionStarter,
+    questionSensorHealth: _questionSensorHealth,
+    questionSnapshotRefresh: _questionSnapshotRefresh,
+    ...publicCommands
+  } = commands ?? {};
+  return {
+    ...rest,
+    commands: publicCommands,
+  };
 };
 
 const hasResourcesParquet = (storage) => Boolean(storage.tables?.find((table) => table.table === 'resources')?.present);
@@ -1449,7 +526,7 @@ export async function setup(args = {}) {
     { optional: Boolean(cli), managedCli: managedRuntime }
   );
 
-  let capabilities = { checked: false, chartQuestions: false, reason: 'Density CLI not found.' };
+  let capabilities = { checked: false, commands: {}, reason: 'Density CLI not found.' };
   let missingRequiredCapabilities = [];
   let status;
   if (cli) {
@@ -1458,19 +535,11 @@ export async function setup(args = {}) {
     capabilities = await discoverCliCapabilities(cli, { dataDir });
     addCheck(
       checks,
-      'density chart capability known',
-      capabilities.checked,
-      capabilities.checked
-        ? (capabilities.chartQuestions ? 'chart questions supported' : 'chart questions not supported by this CLI')
-        : capabilities.reason
-    );
-    addCheck(
-      checks,
-      'fast local question answering advertised',
-      Boolean(capabilities.questionAnswering?.localFirst && capabilities.commands?.questionStarter),
-      capabilities.questionAnswering?.localFirst && capabilities.commands?.questionStarter
-        ? `${capabilities.questionAnswering.starterQuestionCount ?? '50+'} starter questions; target ${capabilities.questionAnswering.targetTextAnswerMs ?? 5000}ms text / ${capabilities.questionAnswering.targetChartAnswerMs ?? 10000}ms charts`
-        : 'CLI does not advertise the fast local utilization question contract yet.'
+      'direct database tools advertised',
+      Boolean(capabilities.commands?.getDbSchema && capabilities.commands?.queryDb),
+      capabilities.commands?.getDbSchema && capabilities.commands?.queryDb
+        ? 'get-db-schema and query-db are available for scoped local DuckDB reads.'
+        : 'CLI does not advertise the hardened local database query contract yet.'
     );
     addCheck(
       checks,
@@ -1500,28 +569,6 @@ export async function setup(args = {}) {
     storage.parquetReady,
     storage.parquetReady ? `${storage.parquetBytes} bytes across expected tables` : 'Parquet export is missing or incomplete.'
   );
-  if (capabilities.commands?.questionStarter) {
-    addCheck(
-      checks,
-      'fast question parquet ready',
-      storage.fastQuestionsReady,
-      storage.fastQuestionsReady
-        ? `${storage.fastQuestionBytes} bytes across fast question tables`
-        : `Missing fast question tables: ${storage.fastQuestionTables.filter((table) => !table.present).map((table) => table.table).join(', ') || 'unknown'}. Run full onboarding/export to sync spaces and metrics.`,
-    );
-  }
-  let starterCache;
-  if (cli && storage.parquetReady && storage.fastQuestionsReady && capabilities.commands?.questionStarter) {
-    starterCache = await checkStarterCache(cli, dataDir);
-    addCheck(
-      checks,
-      'fast starter answers ready',
-      starterCache.ready && starterCache.useful !== false,
-      starterReadyDetail(starterCache, capabilities.questionAnswering?.starterQuestionCount),
-      { optional: true, starterCache }
-    );
-  }
-
   const update = await checkPluginUpdate();
   const usableCliSelected = Boolean(cli) && missingRequiredCapabilities.length === 0;
   const managedInstallNeeded = Boolean(managedManifest)
@@ -1548,14 +595,7 @@ export async function setup(args = {}) {
       tool: 'auth_login',
       command: 'density auth login',
     },
-    cli && status?.code === 0 && storage.parquetReady && capabilities.commands?.questionStarter && !storage.fastQuestionsReady && capabilities.commands?.repairFastQuestions && hasResourcesParquet(storage) && {
-      id: 'repair_fast_questions',
-      label: 'Repair local fast-question metadata from resources.parquet.',
-      tool: 'repair_fast_questions',
-      args: { dataDir },
-      command: 'density repair fast-questions --format json',
-    },
-    cli && status?.code === 0 && (!storage.parquetReady || (capabilities.commands?.questionStarter && !storage.fastQuestionsReady)) && {
+    cli && status?.code === 0 && !storage.parquetReady && {
       id: 'onboard_customer',
       label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
       tool: 'onboard_customer',
@@ -1573,9 +613,9 @@ export async function setup(args = {}) {
       label: 'Update the Density CLI for lifecycle-aware building analysis.',
       command: 'density capabilities --format json',
     },
-    cli && status?.code === 0 && storage.parquetReady && !capabilities.chartQuestions && {
-      id: 'chart_unsupported',
-      label: 'Update the Density CLI for chart questions, or use local query/viz commands.',
+    cli && status?.code === 0 && storage.parquetReady && !(capabilities.commands?.getDbSchema && capabilities.commands?.queryDb) && {
+      id: 'update_cli_for_db_query',
+      label: 'Update the Density CLI for scoped local database queries.',
       command: 'density capabilities --format json',
     },
     update.available && {
@@ -1594,9 +634,8 @@ export async function setup(args = {}) {
     dataDir,
     cli: safeCliInfo(cli),
     checks,
-    capabilities,
+    capabilities: publicCliCapabilities(capabilities),
     storage,
-    starterCache,
     update,
     managedCli: {
       manifest: managedManifest,
@@ -1611,13 +650,16 @@ export async function setup(args = {}) {
 
 export async function installManagedCli(args = {}) {
   try {
-    return await installManagedCliRuntime({
+    const result = await installManagedCliRuntime({
       dataDir: resolveDataDir(args.dataDir),
       manifestPath: args.manifestPath,
       platform: args.platform,
       runtimeRoot: args.runtimeRoot,
       timeoutMs: args.timeoutMs,
     });
+    return result.capabilities
+      ? { ...result, capabilities: publicCliCapabilities(result.capabilities) }
+      : result;
   } catch (error) {
     return {
       ok: false,
@@ -1664,7 +706,7 @@ export async function availableBuildings(args = {}) {
     };
   }
 
-  const result = await runDensity(cli, ['available-buildings', '--format', 'json'], {
+  const result = await runDensity(cli, ['available-buildings', '--include-metrics', '--format', 'json'], {
     dataDir,
     allowFailure: true,
     timeoutMs: args.timeoutMs ?? 15000,
@@ -1709,6 +751,259 @@ export async function availableBuildings(args = {}) {
   };
 }
 
+async function runCapabilityJsonCommand(args, options) {
+  const startedAt = Date.now();
+  const cli = await requireCli();
+  const cliResolvedAt = Date.now();
+  const dataDir = resolveDataDir(args.dataDir);
+  const timeoutMs = args.timeoutMs ?? options.timeoutMs;
+  const capabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs });
+  const capabilitiesDiscoveredAt = Date.now();
+  const cliInfo = safeCliInfo(cli);
+  const performance = (commandCompletedAt = capabilitiesDiscoveredAt) => options.measurePerformance
+    ? {
+        performance: {
+          cliResolutionMs: cliResolvedAt - startedAt,
+          capabilityDiscoveryMs: capabilitiesDiscoveredAt - cliResolvedAt,
+          cliCommandMs: commandCompletedAt - capabilitiesDiscoveredAt,
+          totalMs: commandCompletedAt - startedAt,
+        },
+      }
+    : {};
+
+  if (!capabilities.commands?.[options.capability]) {
+    return {
+      ok: false,
+      unsupported: true,
+      dataDir,
+      cli: cliInfo,
+      capabilities,
+      ...options.extraFields,
+      ...performance(),
+      error: options.unsupportedError,
+      nextAction: options.nextAction,
+    };
+  }
+
+  const result = await runDensity(cli, options.cliArgs, {
+    dataDir,
+    allowFailure: true,
+    timeoutMs,
+  });
+  const commandCompletedAt = Date.now();
+  if (result.code !== 0 || result.timedOut) {
+    return {
+      ok: false,
+      dataDir,
+      cli: cliInfo,
+      ...options.extraFields,
+      ...performance(commandCompletedAt),
+      error: result.timedOut ? options.timedOutError : oneLine(result.stderr || result.stdout),
+    };
+  }
+
+  try {
+    return {
+      ok: true,
+      dataDir,
+      cli: cliInfo,
+      ...performance(commandCompletedAt),
+      [options.payloadKey]: JSON.parse(result.stdout),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      dataDir,
+      cli: cliInfo,
+      ...options.extraFields,
+      ...performance(commandCompletedAt),
+      error: `${options.responseLabel} response was not JSON: ${error.message}`,
+      stdout: oneLine(result.stdout),
+    };
+  }
+}
+
+export async function getDbSchema(args = {}) {
+  const tables = Array.isArray(args.tables)
+    ? args.tables.filter((table) => typeof table === 'string' && table.trim()).map((table) => table.trim())
+    : [];
+  return runCapabilityJsonCommand(args, {
+    capability: 'getDbSchema',
+    cliArgs: [
+      'get-db-schema',
+      ...(tables.length > 0 ? ['--tables', tables.join(',')] : []),
+      '--format', 'json',
+    ],
+    timeoutMs: 15000,
+    unsupportedError: 'This Density CLI does not support get-db-schema yet.',
+    timedOutError: 'DB schema lookup timed out.',
+    responseLabel: 'DB schema',
+    payloadKey: 'schema',
+    nextAction: {
+      id: 'update_cli_for_db_schema',
+      label: 'Update/build a Density CLI that supports density get-db-schema.',
+      command: 'density capabilities --format json',
+    },
+  });
+}
+
+export async function demoModeStatus(args = {}) {
+  const dataDir = resolveDataDir(args.dataDir);
+  const cli = await resolveDensityCli();
+  if (!cli) {
+    throw new Error('Demo mode status is unavailable.');
+  }
+  const capabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs: args.timeoutMs ?? 5000 });
+  if (!capabilities.commands?.demoMode) {
+    throw new Error('Demo mode status is unavailable.');
+  }
+  const result = await runDensity(cli, ['demo', 'status', '--format', 'json'], {
+    dataDir,
+    allowFailure: true,
+    timeoutMs: args.timeoutMs ?? 5000,
+  });
+  if (result.code !== 0 || result.timedOut) {
+    throw new Error('Demo mode status is unavailable.');
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('Demo mode status is unavailable.');
+  }
+  if (!isRecord(parsed) || typeof parsed.enabled !== 'boolean'
+    || (parsed.enabled && !(
+      (typeof parsed.generation === 'string' && parsed.generation.trim())
+      || (Number.isSafeInteger(parsed.generation) && parsed.generation >= 0)
+    ))
+    || (parsed.enabled && (typeof parsed.organizationId !== 'string' || !parsed.organizationId.trim()))) {
+    throw new Error('Demo mode status is unavailable.');
+  }
+  return {
+    supported: true,
+    enabled: parsed.enabled,
+    generation: parsed.enabled ? String(parsed.generation) : 'off',
+    ...(parsed.enabled ? { organizationId: parsed.organizationId } : {}),
+  };
+}
+
+async function attachQueryChartPreview(response, args = {}, extraFields = {}, payloadKey = 'result') {
+  const payload = response?.[payloadKey];
+  const html = payload?.chart?.state === 'rendered'
+    ? payload.chart.artifacts?.html
+    : undefined;
+  if (typeof html !== 'string' || !path.isAbsolute(html)) {
+    return { ...response, ...extraFields };
+  }
+  let preview;
+  try {
+    preview = await renderHtmlPreview(path.normalize(html), { timeoutMs: args.timeoutMs ?? 10000 });
+  } catch (error) {
+    preview = { status: 'unavailable', reason: oneLine(error?.message || String(error)) };
+  }
+  if (preview.status !== 'available') {
+    return {
+      ...response,
+      ...extraFields,
+      [payloadKey]: {
+        ...payload,
+        chart: {
+          ...payload.chart,
+          png: { state: 'unavailable', reason: preview.reason },
+        },
+      },
+    };
+  }
+  const png = preview.artifact.path;
+  return {
+    ...response,
+    ...extraFields,
+    png,
+    [payloadKey]: {
+      ...payload,
+      chart: {
+        ...payload.chart,
+        artifacts: {
+          ...payload.chart.artifacts,
+          png,
+        },
+        png: {
+          state: 'available',
+          width: preview.width,
+          height: preview.height,
+          renderer: preview.renderer,
+        },
+      },
+    },
+  };
+}
+
+export const QUERY_DB_DEFAULT_TIMEOUT_MS = 120000;
+
+export async function queryDb(args = {}) {
+  const sql = String(args.sql || '').trim();
+  if (!sql) throw new Error('sql is required.');
+  const declaredAnalysisContext = validateQueryAnalysis(args.analysis);
+  const response = await runCapabilityJsonCommand(args, {
+    capability: 'queryDb',
+    cliArgs: ['query-db', '--sql', sql, '--format', 'json'],
+    timeoutMs: QUERY_DB_DEFAULT_TIMEOUT_MS,
+    measurePerformance: true,
+    extraFields: { sql },
+    unsupportedError: 'This Density CLI does not support query-db yet.',
+    timedOutError: 'DB query timed out.',
+    responseLabel: 'DB query',
+    payloadKey: 'result',
+    nextAction: {
+      id: 'update_cli_for_query_db',
+      label: 'Update/build a Density CLI that supports density query-db.',
+      command: 'density capabilities --format json',
+    },
+  });
+  return declaredAnalysisContext === undefined ? response : { ...response, declaredAnalysisContext };
+}
+
+export async function renderChart(args = {}) {
+  const evidenceId = String(args.evidenceId || '').trim();
+  if (!/^qe_[a-f0-9]{64}$/u.test(evidenceId)) throw new Error('A valid evidenceId is required.');
+  if (!isRecord(args.chart)) throw new Error('chart is required.');
+  const response = await runCapabilityJsonCommand(args, {
+    capability: 'renderChart',
+    cliArgs: ['render-chart', '--evidence', evidenceId, '--chart', JSON.stringify(args.chart), '--format', 'json'],
+    timeoutMs: 30000,
+    unsupportedError: 'This Density CLI does not support presentation-only chart rendering yet.',
+    timedOutError: 'Chart rendering timed out.',
+    responseLabel: 'Chart rendering',
+    payloadKey: 'result',
+    nextAction: {
+      id: 'update_cli_for_render_chart',
+      label: 'Update/build a Density CLI that supports density render-chart.',
+      command: 'density capabilities --format json',
+    },
+  });
+  return attachQueryChartPreview(response, args);
+}
+
+export async function configureBrand(args = {}) {
+  const source = String(args.source || '').trim();
+  if (!source) throw new Error('A brand guideline source is required.');
+  const logo = String(args.logo || '').trim();
+  return runCapabilityJsonCommand(args, {
+    capability: 'brandGuidelines',
+    cliArgs: ['brand', 'set', '--source', source, ...(logo ? ['--logo', logo] : []), '--format', 'json'],
+    timeoutMs: 30000,
+    unsupportedError: 'This Density CLI does not support brand guidelines yet.',
+    timedOutError: 'Brand guideline ingestion timed out.',
+    responseLabel: 'Brand guideline ingestion',
+    payloadKey: 'result',
+    nextAction: {
+      id: 'update_cli_for_brand_guidelines',
+      label: 'Update the Density CLI to support brand guidelines.',
+      command: 'density capabilities --format json',
+    },
+  });
+}
+
 async function attachBuildingReadiness(response, args = {}) {
   if (response?.buildingReadiness) return response;
   try {
@@ -1724,62 +1019,6 @@ async function attachBuildingReadiness(response, args = {}) {
       },
     };
   }
-}
-
-export async function repairFastQuestions(args = {}) {
-  const cli = await requireCli();
-  const dataDir = resolveDataDir(args.dataDir);
-  const result = await runDensity(cli, ['repair', 'fast-questions', '--format', 'json'], {
-    dataDir,
-    allowFailure: true,
-    timeoutMs: 30000,
-  });
-  if (result.code !== 0 || result.timedOut) {
-    return {
-      ok: false,
-      dataDir,
-      cli: safeCliInfo(cli),
-      error: result.timedOut ? 'Fast-question repair timed out.' : oneLine(result.stderr || result.stdout),
-      storage: await storageReport(dataDir),
-      nextAction: {
-        id: 'onboard_customer',
-        label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
-        tool: 'onboard_customer',
-        args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: true },
-      },
-      nextSteps: [`Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`],
-      userVisiblePrimaryActions: 1,
-    };
-  }
-  let repair;
-  try {
-    repair = JSON.parse(result.stdout);
-  } catch (error) {
-    return {
-      ok: false,
-      dataDir,
-      cli: safeCliInfo(cli),
-      error: `Fast-question repair response was not JSON: ${error.message}`,
-      stdout: oneLine(result.stdout),
-      storage: await storageReport(dataDir),
-    };
-  }
-  const storage = await storageReport(dataDir);
-  return {
-    ok: storage.fastQuestionsReady,
-    dataDir,
-    cli: safeCliInfo(cli),
-    repair,
-    storage,
-    nextAction: storage.fastQuestionsReady ? undefined : {
-      id: 'onboard_customer',
-      label: `Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`,
-      tool: 'onboard_customer',
-      args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: true },
-    },
-    nextSteps: storage.fastQuestionsReady ? [] : [`Fetch ${DEFAULT_METRICS_DAYS} days for all locations, then continue deeper history in the background.`],
-    userVisiblePrimaryActions: storage.fastQuestionsReady ? 0 : 1,
-  };
 }
 
 export async function authLogin(args = {}) {
@@ -1804,7 +1043,6 @@ export async function onboardCustomer(args = {}) {
   const backgroundDeepSyncDays = backgroundDeepSync
     ? boundedHistoricalExportDays(args.backgroundDeepSyncDays ?? DEFAULT_BACKGROUND_DEEP_SYNC_DAYS)
     : undefined;
-  const prewarmQuestions = args.prewarmQuestions !== false;
   const timeoutSeconds = Number.isFinite(Number(args.timeoutSeconds)) ? Number(args.timeoutSeconds) : 110;
   const steps = [];
   const runStep = async (name, commandArgs, options = {}) => {
@@ -1829,27 +1067,6 @@ export async function onboardCustomer(args = {}) {
     }
     return step;
   };
-  const runOptionalStep = async (name, commandArgs, options = {}) => {
-    const startedAt = Date.now();
-    const result = await runDensity(cli, commandArgs, {
-      dataDir,
-      allowFailure: true,
-      timeoutMs: options.timeoutMs,
-    });
-    const step = {
-      name,
-      command: ['density', ...commandArgs].join(' '),
-      ok: result.code === 0 && !result.timedOut,
-      optional: true,
-      timedOut: result.timedOut,
-      seconds: Number(((Date.now() - startedAt) / 1000).toFixed(2)),
-      stdout: oneLine(result.stdout),
-      stderr: oneLine(result.stderr),
-    };
-    steps.push(step);
-    return step;
-  };
-
   try {
     const metricsCommand = ['sync', '--stream', 'metrics', '--all-spaces', '--since', `${days}d`, '--until', 'now', '--interval', metricsIntervalForDays(days)];
     const occupancyCommand = ['sync', '--stream', 'occupancy', '--all-spaces', '--since', `${days}d`, '--until', 'now', '--interval', '1h'];
@@ -1919,44 +1136,7 @@ export async function onboardCustomer(args = {}) {
     await runStep('sync occupancy overview', occupancyCommand, { timeoutMs });
     await runStep('export parquet', exportCommand, { timeoutMs });
     const storage = await storageReport(dataDir);
-    let starterQuestions;
-    if (storage.parquetReady && storage.fastQuestionsReady && prewarmQuestions) {
-      const capabilities = await discoverCliCapabilities(cli, { dataDir });
-      if (capabilities.commands?.questionStarter) {
-        const step = await runOptionalStep('prewarm starter questions', ['question', '--starter', '--chart', '--format', 'json'], { timeoutMs });
-        if (step.ok) {
-          try {
-            const parsed = JSON.parse(step.stdout);
-            starterQuestions = {
-              ok: true,
-              ready: Boolean(parsed.readiness?.ready),
-              ...starterUsefulness(parsed.readiness),
-              readiness: parsed.readiness,
-              artifactManifest: parsed.artifactManifest,
-              cache: parsed.cache,
-              questionCount: parsed.questionCount,
-            };
-          } catch (error) {
-            starterQuestions = {
-              ok: false,
-              error: `Starter-question response was not JSON: ${error.message}`,
-            };
-          }
-        } else {
-          starterQuestions = {
-            ok: false,
-            error: step.timedOut ? 'Starter-question prewarm timed out.' : step.stderr || step.stdout,
-          };
-        }
-      } else {
-        starterQuestions = {
-          ok: false,
-          skipped: true,
-          reason: 'Density CLI does not support starter-question prewarm.',
-        };
-      }
-    }
-    const backgroundJob = backgroundDeepSync && storage.parquetReady && storage.fastQuestionsReady
+    const backgroundJob = backgroundDeepSync && storage.parquetReady
       ? await startBackgroundDeepSync({
         dataDir,
         orgId: args.orgId,
@@ -1966,7 +1146,7 @@ export async function onboardCustomer(args = {}) {
       : undefined;
 
     return {
-      ok: storage.parquetReady && (!prewarmQuestions || storage.fastQuestionsReady),
+      ok: storage.parquetReady,
       mode: backgroundJob ? 'recent-plus-background' : 'full-sync',
       dataDir,
       days,
@@ -1982,14 +1162,13 @@ export async function onboardCustomer(args = {}) {
       cli: safeCliInfo(cli),
       steps,
       storage,
-      starterQuestions,
-      nextAction: storage.parquetReady && storage.fastQuestionsReady ? undefined : {
+      nextAction: storage.parquetReady ? undefined : {
         id: 'export_parquet',
         label: 'Export Parquet after sync completes.',
         command: `density ${exportCommand.join(' ')}`,
       },
-      nextSteps: storage.parquetReady && storage.fastQuestionsReady ? [] : ['Export Parquet after sync completes.'],
-      userVisiblePrimaryActions: storage.parquetReady && storage.fastQuestionsReady ? 0 : 1,
+      nextSteps: storage.parquetReady ? [] : ['Export Parquet after sync completes.'],
+      userVisiblePrimaryActions: storage.parquetReady ? 0 : 1,
     };
   } catch (error) {
     return {
@@ -2118,1271 +1297,131 @@ export async function onboardingStatus(args = {}) {
   };
 }
 
-const askChartWithinDeadline = async (args = {}, inheritedDeadline, inheritedCapabilities) => {
-  const question = String(args.question || '').trim();
-  if (!question) throw new Error('question is required.');
-  const presentation = resolvePresentation(args.presentation, 'broadsheet');
+const latestIso = (values) => values.filter(Boolean).sort().at(-1);
+
+const streamName = (key) => {
+  const parts = String(key).split(':');
+  return parts[0] === 'org' ? parts[2] : parts[0];
+};
+
+const streamScope = (key) => {
+  if (String(key).includes(':all-spaces')) return 'all_spaces';
+  if (String(key).includes(':spc_')) return 'selected_spaces';
+  return 'organization';
+};
+
+const summarizeSyncState = (streams = {}) => {
+  const summaries = new Map();
+  for (const [key, value] of Object.entries(streams)) {
+    const name = streamName(key);
+    const current = summaries.get(name) ?? {
+      name,
+      stateEntries: 0,
+      scopes: new Set(),
+      latestSyncAt: undefined,
+      coverageThrough: undefined,
+    };
+    current.stateEntries += 1;
+    current.scopes.add(streamScope(key));
+    current.latestSyncAt = latestIso([current.latestSyncAt, value?.lastSyncAt]);
+    current.coverageThrough = latestIso([current.coverageThrough, value?.updatedSince]);
+    summaries.set(name, current);
+  }
+  return [...summaries.values()]
+    .map((summary) => ({
+      ...summary,
+      scopes: [...summary.scopes].sort(),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+};
+
+const readStatusState = async (dataDir) => {
+  try {
+    const state = JSON.parse(await readFile(path.join(dataDir, 'state.json'), 'utf8'));
+    return isRecord(state) ? state : {};
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {};
+    throw new Error(`Unable to read Density status state: ${oneLine(error.message)}`);
+  }
+};
+
+const uniqueParquetStorage = (storage) => {
+  const tables = new Map();
+  for (const table of [...storage.tables, ...storage.fastQuestionTables]) {
+    const current = tables.get(table.table);
+    if (!current || table.bytes > current.bytes) tables.set(table.table, table);
+  }
+  const uniqueTables = [...tables.values()];
+  return {
+    parquetBytes: uniqueTables.reduce((sum, table) => sum + table.bytes, 0),
+    parquetFiles: uniqueTables.reduce((sum, table) => sum + table.files, 0),
+    newestParquetModifiedAt: latestIso(uniqueTables.map((table) => table.modifiedAt)),
+  };
+};
+
+export async function status(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
-  const needsFloorplan = floorplanArtifactIntent(question);
-  const metadataIntent = metadataQuestionIntent(question);
-  const liveIntent = currentAvailabilityIntent(question);
-  if (needsFloorplan && !liveIntent) {
-    return floorUsageReport({ ...args, question, dataDir });
-  }
-  if (liveIntent && metadataIntent !== 'building_lifecycle') {
-    const response = await liveWayfindingStatus({
-      ...args,
-      query: question,
-      dataDir,
-      floorplanArtifactRequired: needsFloorplan,
-    });
-    return {
-      ...response,
-      question,
-      intent: needsFloorplan ? 'live_wayfinding_floorplan' : 'live_wayfinding',
-      routedTool: 'live_wayfinding_status',
-      routedSkill: 'wayfinding',
-      chartSuppressed: true,
-      artifactRequired: needsFloorplan ? 'floorplan' : undefined,
-    };
-  }
-  const deadline = inheritedDeadline ?? createHistoricalQuestionDeadline(args.timeoutMs);
-  const timedOutResponse = () => historicalQuestionTimedOut({
-    question,
+  const [state, storage, backgroundDeepSync] = await Promise.all([
+    readStatusState(dataDir),
+    storageReport(dataDir),
+    latestDeepSyncStatus(dataDir),
+  ]);
+  const streams = summarizeSyncState(isRecord(state.streams) ? state.streams : {});
+  const latestSyncAt = latestIso(streams.map((stream) => stream.latestSyncAt));
+  const parquet = uniqueParquetStorage(storage);
+  const tokenExpiresAt = typeof state.token?.expiresAt === 'string' ? state.token.expiresAt : undefined;
+  const accessTokenPresent = await fileExists(path.join(dataDir, '.token'));
+  const refreshTokenPresent = await fileExists(path.join(dataDir, '.refresh-token'));
+  const localDataReady = storage.parquetReady && storage.fastQuestionsReady;
+
+  return {
+    ok: true,
+    kind: 'density.status.v1',
+    generatedAt: nowIso(),
     dataDir,
-    deadline,
-    intent: 'ask_chart_timeout',
-  });
-  const cli = await requireCli();
-  let remainingMs = deadline.remainingMs();
-  if (remainingMs <= 0) return timedOutResponse();
-  const capabilities = inheritedCapabilities
-    ?? await discoverCliCapabilities(cli, { dataDir, timeoutMs: remainingMs });
-  if (deadline.remainingMs() <= 0) return timedOutResponse();
-  if (!capabilities.checked && /timed out/i.test(capabilities.reason ?? '')) return timedOutResponse();
-  if (!capabilities.chartQuestions) {
-    return {
-      ok: false,
-      unsupported: true,
-      question,
-      dataDir,
-      cli: safeCliInfo(cli),
-      capabilities,
-      message: 'This Density CLI does not support chart questions yet.',
-      nextAction: {
-        id: 'update_cli_for_chart_questions',
-        label: 'Update/build a Density CLI that supports chart questions, or use density viz --html.',
-        command: 'density capabilities --format json',
+    identity: {
+      organization: state.organizationId
+        ? { id: state.organizationId, name: state.organizationName }
+        : null,
+      user: typeof state.token?.subject === 'string' ? { id: state.token.subject } : null,
+      authentication: {
+        accessTokenPresent,
+        refreshTokenPresent,
+        expiresAt: tokenExpiresAt,
+        expired: tokenExpiresAt ? Date.parse(tokenExpiresAt) <= Date.now() : undefined,
       },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-
-  if (capabilities.generativeUi?.renderer === 'json-render' || capabilities.commands?.questionUi) {
-    const useAnalyticSlide = presentation === 'slide' && supportsAnalyticArtifact(capabilities, 'slide');
-    const presentationFlag = useAnalyticSlide ? '--slide' : '--chart';
-    remainingMs = deadline.remainingMs();
-    if (remainingMs <= 0) return timedOutResponse();
-    const cachedUiAnswer = await runDensity(cli, ['question', question, '--cached', presentationFlag, '--format', 'ui'], {
-      dataDir,
-      allowFailure: true,
-      timeoutMs: remainingMs,
-    });
-    if (cachedUiAnswer.timedOut || deadline.remainingMs() <= 0) return timedOutResponse();
-    let uiAnswer = cachedUiAnswer;
-    if (!await cachedQuestionUiIsUsable(cachedUiAnswer)) {
-      remainingMs = deadline.remainingMs();
-      if (remainingMs <= 0) return timedOutResponse();
-      uiAnswer = await runDensity(cli, ['question', question, presentationFlag, '--format', 'ui'], {
-        dataDir,
-        allowFailure: true,
-        timeoutMs: remainingMs,
-      });
-    }
-    if (uiAnswer.timedOut || deadline.remainingMs() <= 0) return timedOutResponse();
-    if (uiAnswer.code === 0) {
-      remainingMs = deadline.remainingMs();
-      if (remainingMs <= 0) return timedOutResponse();
-      const response = await parseQuestionUiAnswer({
-        question,
-        dataDir,
-        cli,
-        result: uiAnswer,
-        tool: 'ask_chart',
-        renderTimeoutMs: remainingMs,
-        analyticArtifactSupported: supportsAnalyticArtifact(capabilities),
-        analyticCapabilities: capabilities,
-        includePanelTarget: useAnalyticSlide,
-      });
-      if (deadline.remainingMs() <= 0) return timedOutResponse();
-      return {
-        ...response,
-        capabilities,
-        ...(presentation === 'slide'
-          ? { presentationDelivery: presentationDelivery({ requested: 'slide', slideSupported: useAnalyticSlide, response }) }
-          : {}),
-      };
-    }
-  }
-
-  remainingMs = deadline.remainingMs();
-  if (remainingMs <= 0) return timedOutResponse();
-  const answer = await runDensity(cli, ['ask', question, '--chart', '--format', 'json'], {
-    dataDir,
-    allowFailure: true,
-    timeoutMs: remainingMs,
-  });
-  if (answer.timedOut || deadline.remainingMs() <= 0) return timedOutResponse();
-  if (answer.code !== 0) {
-    return {
-      ok: false,
-      question,
-      dataDir,
-      cli: safeCliInfo(cli),
-      capabilities,
-      error: oneLine(answer.stderr || answer.stdout),
-    };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(answer.stdout);
-  } catch (error) {
-    throw new Error(`Density chart response was not JSON: ${error.message}`);
-  }
-  remainingMs = deadline.remainingMs();
-  if (remainingMs <= 0) return timedOutResponse();
-  const png = await renderPng(parsed.chart, { timeoutMs: remainingMs });
-  if (deadline.remainingMs() <= 0) return timedOutResponse();
-  const response = {
-    ok: true,
-    sourceLayer: SOURCE_LAYERS.localCustomerData,
-    sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
-    provenance: localHistoricalProvenance({ dataDir, tool: 'ask_chart' }),
-    question,
-    title: parsed.title ?? '',
-    subtitle: parsed.subtitle ?? '',
-    chart: parsed.chart,
-    html: parsed.html,
-    png,
-    effectiveScope: parsed.effectiveScope,
-    freshness: parsed.freshness,
-    confidence: parsed.confidence,
-    caveats: parsed.caveats,
-    dataDir,
-    cli: safeCliInfo(cli),
-    capabilities,
-  };
-  if (presentation === 'slide') {
-    response.presentationDelivery = presentationDelivery({
-      requested: 'slide',
-      slideSupported: false,
-      response,
-    });
-  }
-  rememberChartContext(dataDir, response);
-  return response;
-};
-
-export async function askChart(args = {}) {
-  return await askChartWithinDeadline(args);
-}
-
-const analyticSlideQuestion = (value) => {
-  if (typeof value !== 'string') throw new Error('question is required.');
-  const question = value.trim();
-  if (!question) throw new Error('question is required.');
-  if (question.includes('\0')) throw new Error('question must not contain null bytes.');
-  if (question.length > 10000) throw new Error('question must be 10000 characters or fewer.');
-  return question;
-};
-
-const analyticSlideDataDir = (value) => {
-  if (value !== undefined && typeof value !== 'string') throw new Error('dataDir must be a path string.');
-  const raw = value === undefined ? resolveDataDir() : value.trim();
-  if (!raw) throw new Error('dataDir must be a non-empty path string.');
-  if (raw.includes('\0')) throw new Error('dataDir must not contain null bytes.');
-  return path.resolve(raw);
-};
-
-const publicClarificationRequest = (value) => {
-  if (!isRecord(value)
-    || value.kind !== 'density.clarification_request.v1'
-    || value.contract !== 'density.clarification'
-    || typeof value.question !== 'string'
-    || !value.question.trim()
-    || typeof value.prompt !== 'string'
-    || !value.prompt.trim()
-    || !isRecord(value.responseSemantics)
-    || value.responseSemantics.answer !== false
-    || value.responseSemantics.chart !== false
-    || value.responseSemantics.writesArtifacts !== false) {
-    return undefined;
-  }
-  return {
-    kind: value.kind,
-    contract: value.contract,
-    reason: typeof value.reason === 'string' ? value.reason : undefined,
-    question: value.question.trim(),
-    prompt: value.prompt.trim(),
-    requiredChoiceCount: Number.isInteger(value.requiredChoiceCount) ? value.requiredChoiceCount : undefined,
-    suggestions: Array.isArray(value.suggestions) ? value.suggestions : [],
-    freeform: isRecord(value.freeform) ? value.freeform : undefined,
-    nextActionAfterAnswer: isRecord(value.nextActionAfterAnswer) ? value.nextActionAfterAnswer : undefined,
-    responseSemantics: {
-      answer: false,
-      chart: false,
-      benchmark: value.responseSemantics.benchmark === false ? false : undefined,
-      writesArtifacts: false,
     },
-  };
-};
-
-const validatedAnalyticGates = (value) => {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length !== 5) return undefined;
-  const gates = [];
-  for (const [index, entry] of value.entries()) {
-    if (!isRecord(entry)
-      || entry.gate !== index + 1
-      || typeof entry.decision !== 'string'
-      || !entry.decision.trim()
-      || typeof entry.reason !== 'string'
-      || !entry.reason.trim()) {
-      return undefined;
-    }
-    gates.push({ gate: entry.gate, decision: entry.decision.trim(), reason: entry.reason.trim() });
-  }
-  return gates;
-};
-
-const validatedDataProvenance = (value) => {
-  const allowedClasses = new Set(['density_native', 'customer_supplied', 'derived', 'unavailable']);
-  if (!Array.isArray(value) || value.length === 0) return undefined;
-  const entries = [];
-  const ids = new Set();
-  for (const entry of value) {
-    if (!isRecord(entry)
-      || typeof entry.input !== 'string'
-      || !entry.input.trim()
-      || !allowedClasses.has(entry.class)
-      || (entry.id !== undefined && (typeof entry.id !== 'string' || !entry.id.trim() || ids.has(entry.id.trim())))
-      || (entry.source_detail !== undefined && typeof entry.source_detail !== 'string')) {
-      return undefined;
-    }
-    if (typeof entry.id === 'string') ids.add(entry.id.trim());
-    entries.push({
-      ...(typeof entry.id === 'string' ? { id: entry.id.trim() } : {}),
-      input: entry.input.trim(),
-      class: entry.class,
-      ...(typeof entry.source_detail === 'string' && entry.source_detail.trim()
-        ? { source_detail: entry.source_detail.trim() }
-        : {}),
-    });
-  }
-  return entries;
-};
-
-const validatedSlideTarget = (analytic, panelTarget, runtimeArtifact) => {
-  const runtimeSlideFile = isRecord(runtimeArtifact) ? runtimeArtifact.slideFile : undefined;
-  const slideFile = runtimeSlideFile ?? analytic.slideFile;
-  if (typeof slideFile !== 'string' || !slideFile.trim()) {
-    return { ok: false, reason: 'runtime artifact.slideFile is missing.' };
-  }
-  const slidePath = slideFile.trim();
-  if (analytic.slideFile !== undefined && analytic.slideFile !== slidePath) {
-    return { ok: false, reason: 'analytic.slideFile must match runtime artifact.slideFile.' };
-  }
-  if (!path.isAbsolute(slidePath) || path.normalize(slidePath) !== slidePath) {
-    return { ok: false, reason: 'analytic.slideFile must be a normalized absolute path.' };
-  }
-  if (!isRecord(panelTarget)
-    || panelTarget.contract !== 'density.panel-target.v1'
-    || panelTarget.kind !== 'analytic-slide') {
-    return { ok: false, reason: 'panelTarget must use the density.panel-target.v1 analytic-slide contract.' };
-  }
-  if (panelTarget.path !== slidePath) {
-    return { ok: false, reason: 'panelTarget.path must match analytic.slideFile.' };
-  }
-  if (panelTarget.url !== undefined) {
-    try {
-      const targetUrl = new URL(panelTarget.url);
-      if (targetUrl.protocol !== 'file:' || fileURLToPath(targetUrl) !== slidePath) {
-        return { ok: false, reason: 'panelTarget.url must be a file URL for analytic.slideFile.' };
-      }
-    } catch {
-      return { ok: false, reason: 'panelTarget.url must be a valid file URL for analytic.slideFile.' };
-    }
-  }
-  return {
-    ok: true,
-    slidePath,
-    panelTarget: {
-      contract: panelTarget.contract,
-      kind: panelTarget.kind,
-      ...(typeof panelTarget.title === 'string' ? { title: panelTarget.title } : {}),
-      ...(typeof panelTarget.report === 'string' ? { report: panelTarget.report } : {}),
-      path: slidePath,
-      ...(typeof panelTarget.url === 'string' ? { url: panelTarget.url } : {}),
-    },
-  };
-};
-
-const analyticTrustContext = ({ artifact, capabilities, gates, dataProvenance, evidenceReceipt }) => ({
-  contract: capabilities?.analyticArtifact?.contract ?? 'density.analytic-artifact.v1',
-  validationState: 'rendered',
-  confidence: artifact.confidence,
-  responseMode: artifact.response_mode,
-  gates,
-  dataProvenance,
-  source: artifact.source.trim(),
-  methodology: artifact.methodology.trim(),
-  limitations: artifact.limitations?.map((entry) => entry.trim()) ?? [],
-  runtimeVersion: capabilities?.version,
-  ...(evidenceReceipt ? { evidenceReceipt } : {}),
-  ...(Array.isArray(capabilities?.analyticArtifact?.liveArchetypes)
-    && capabilities.analyticArtifact.liveArchetypes.every((value) => typeof value === 'string' && value.trim())
-    ? { liveArchetypes: capabilities.analyticArtifact.liveArchetypes.map((value) => value.trim()) }
-    : {}),
-});
-
-const learningRecordId = (value) => {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !/^lr_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
-    return null;
-  }
-  return value;
-};
-
-const reviewLearningNextAction = (id) => id ? {
-  id: 'review_analytic_learning',
-  label: 'Add customer context or a quality label to this analytic example.',
-  tool: 'review_analytic_learning',
-  args: { id },
-} : undefined;
-
-const ANALYTIC_EVIDENCE_RECEIPT_CONTRACTS = {
-  'density.analytic-evidence-receipt.v1': [
-    'artifact',
-    'receipt',
-    'local_evidence',
-    'benchmark_evidence_when_used',
-  ],
-  'density.analytic-evidence-receipt.v2': [
-    'artifact',
-    'receipt',
-    'local_evidence',
-    'sensor_evidence_when_used',
-    'benchmark_evidence_when_used',
-  ],
-};
-
-const canonicalJson = (value) => {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-};
-
-const analyticEvidenceSha256 = (value) => createHash('sha256').update(canonicalJson(value)).digest('hex');
-const analyticPresentationSha256 = (html) => createHash('sha256').update(html).digest('hex');
-
-const analyticQuestionIdentity = (value) => typeof value === 'string'
-  ? value.trim().toLowerCase().replace(/[?.!]+$/g, '').replace(/\s+/g, ' ')
-  : '';
-
-const ANALYTIC_DENOMINATOR_KEYS = ['id', 'label', 'coverage'];
-const ANALYTIC_DENOMINATOR_COVERAGE = [
-  'observed_only',
-  'complete_inventory_required',
-  'missing_preserved',
-  'exact_scope_required',
-];
-const ANALYTIC_MATERIAL_CAVEAT_KEYS = ['id', 'text', 'affected_claim', 'severity'];
-const ANALYTIC_MATERIAL_CAVEAT_AFFECTED_CLAIMS = ['headline', 'subtitle', 'interpretation'];
-const ANALYTIC_MATERIAL_CAVEAT_SEVERITIES = ['material', 'routine'];
-
-const unknownAnalyticKeys = (record, allowedKeys) =>
-  Object.keys(record).filter((key) => !allowedKeys.includes(key));
-
-const normalizedAnalyticQualityFields = (artifact) => {
-  const fields = {};
-  if (artifact.metric_unit !== undefined) {
-    if (typeof artifact.metric_unit !== 'string' || !artifact.metric_unit.trim()) {
-      return { ok: false, reason: 'analytic.artifact.metric_unit must be a non-empty string when present.' };
-    }
-    fields.metric_unit = artifact.metric_unit.trim();
-  }
-  if (artifact.denominator !== undefined) {
-    if (!isRecord(artifact.denominator)) {
-      return { ok: false, reason: 'analytic.artifact.denominator must contain non-empty id, label, and coverage fields.' };
-    }
-    const unknownKeys = unknownAnalyticKeys(artifact.denominator, ANALYTIC_DENOMINATOR_KEYS);
-    if (unknownKeys.length > 0) {
-      return { ok: false, reason: `analytic.artifact.denominator contains unknown fields: ${unknownKeys.join(', ')}.` };
-    }
-    if (typeof artifact.denominator.id !== 'string'
-      || !artifact.denominator.id.trim()
-      || typeof artifact.denominator.label !== 'string'
-      || !artifact.denominator.label.trim()
-      || typeof artifact.denominator.coverage !== 'string') {
-      return { ok: false, reason: 'analytic.artifact.denominator must contain non-empty id, label, and coverage fields.' };
-    }
-    if (!ANALYTIC_DENOMINATOR_COVERAGE.includes(artifact.denominator.coverage)) {
-      return { ok: false, reason: `analytic.artifact.denominator.coverage must be one of: ${ANALYTIC_DENOMINATOR_COVERAGE.join(', ')}.` };
-    }
-    fields.denominator = {
-      id: artifact.denominator.id.trim(),
-      label: artifact.denominator.label.trim(),
-      coverage: artifact.denominator.coverage,
-    };
-  }
-  if (artifact.material_caveats !== undefined) {
-    if (!Array.isArray(artifact.material_caveats)) {
-      return { ok: false, reason: 'analytic.artifact.material_caveats must contain structured caveat objects.' };
-    }
-    const ids = new Set();
-    const caveats = [];
-    for (const [index, entry] of artifact.material_caveats.entries()) {
-      if (!isRecord(entry)) {
-        return { ok: false, reason: 'analytic.artifact.material_caveats must contain structured caveat objects.' };
-      }
-      const unknownKeys = unknownAnalyticKeys(entry, ANALYTIC_MATERIAL_CAVEAT_KEYS);
-      if (unknownKeys.length > 0) {
-        return { ok: false, reason: `analytic.artifact.material_caveats[${index}] contains unknown fields: ${unknownKeys.join(', ')}.` };
-      }
-      if (typeof entry.id !== 'string' || !entry.id.trim()
-        || typeof entry.text !== 'string' || !entry.text.trim()) {
-        return { ok: false, reason: 'analytic.artifact.material_caveats must contain structured caveat objects.' };
-      }
-      if (!ANALYTIC_MATERIAL_CAVEAT_AFFECTED_CLAIMS.includes(entry.affected_claim)) {
-        return { ok: false, reason: `analytic.artifact.material_caveats[${index}].affected_claim must be one of: ${ANALYTIC_MATERIAL_CAVEAT_AFFECTED_CLAIMS.join(', ')}.` };
-      }
-      if (!ANALYTIC_MATERIAL_CAVEAT_SEVERITIES.includes(entry.severity)) {
-        return { ok: false, reason: `analytic.artifact.material_caveats[${index}].severity must be one of: ${ANALYTIC_MATERIAL_CAVEAT_SEVERITIES.join(', ')}.` };
-      }
-      const id = entry.id.trim();
-      if (ids.has(id)) {
-        return { ok: false, reason: `analytic.artifact.material_caveats contains duplicate id '${id}'.` };
-      }
-      ids.add(id);
-      caveats.push({
-        id,
-        text: entry.text.trim(),
-        affected_claim: entry.affected_claim,
-        severity: entry.severity,
-      });
-    }
-    fields.material_caveats = caveats;
-  }
-  return { ok: true, fields };
-};
-
-const ANALYTIC_PUBLIC_ARTIFACT_FIELDS = [
-  'question',
-  'response_mode',
-  'confidence',
-  'headline',
-  'subtitle',
-  'measured_observation',
-  'interpretation',
-  'operational_implication',
-  'metric_name',
-  'metric_unit',
-  'metric_value',
-  'denominator',
-  'comparison_value',
-  'change',
-  'analysis_period',
-  'population',
-  'chart_type',
-  'chart_data',
-  'annotation',
-  'benchmark',
-  'uncertainty_reason',
-  'follow_up_question',
-  'source',
-  'methodology',
-  'material_caveats',
-  'limitations',
-  'recommended_action',
-  'learning_record',
-];
-
-const publicAnalyticArtifact = (artifact, dataProvenance, qualityFields) => {
-  const publicArtifact = {};
-  for (const field of ANALYTIC_PUBLIC_ARTIFACT_FIELDS) {
-    if (Object.hasOwn(artifact, field)) publicArtifact[field] = artifact[field];
-  }
-  return {
-    ...publicArtifact,
-    data_provenance: dataProvenance,
-    ...qualityFields,
-  };
-};
-
-const analyticReceiptCapability = (capabilities) => {
-  const capability = capabilities?.analyticArtifact?.evidenceReceipt;
-  if (capability === undefined) return { ok: true, required: false };
-  const companions = isRecord(capability)
-    ? ANALYTIC_EVIDENCE_RECEIPT_CONTRACTS[capability.contract]
-    : undefined;
-  if (!isRecord(capability)
-    || !companions
-    || capability.requiredForSlide !== true
-    || !Array.isArray(capability.companions)
-    || companions.some((entry) => !capability.companions.includes(entry))) {
-    return { ok: false, reason: 'The runtime advertised an invalid analytic evidence receipt capability.' };
-  }
-  return { ok: true, required: true, contract: capability.contract };
-};
-
-const readJsonCompanion = async (file, label) => {
-  let contents;
-  try {
-    contents = await readFile(file, 'utf8');
-  } catch (error) {
-    throw new Error(`${label} could not be read: ${error.message}`);
-  }
-  return parseJsonOutput(contents, label);
-};
-
-const requireRegularCompanion = async (value, field, expected, slideDirectory) => {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(`runtime artifact.${field} is missing.`);
-  }
-  const file = value.trim();
-  if (!path.isAbsolute(file) || path.normalize(file) !== file) {
-    throw new Error(`runtime artifact.${field} must be a normalized absolute path.`);
-  }
-  if (path.dirname(file) !== slideDirectory || file !== expected) {
-    throw new Error(`runtime artifact.${field} must be ${expected}.`);
-  }
-  let details;
-  try {
-    details = await stat(file);
-  } catch (error) {
-    throw new Error(`runtime artifact.${field} could not be read: ${error.message}`);
-  }
-  if (!details.isFile()) throw new Error(`runtime artifact.${field} must be a regular file.`);
-  return file;
-};
-
-const validateReceiptSource = (source, kind, evidenceFile, evidence, requireProvenanceIds) => {
-  if (!isRecord(source)
-    || source.kind !== kind
-    || typeof source.source !== 'string'
-    || !source.source.trim()
-    || typeof source.scope !== 'string'
-    || !source.scope.trim()
-    || !isRecord(source.window)
-    || typeof source.window.start !== 'string'
-    || typeof source.window.end !== 'string'
-    || (requireProvenanceIds && (!Array.isArray(source.provenance_ids)
-      || source.provenance_ids.length === 0
-      || source.provenance_ids.some((id) => typeof id !== 'string' || !id.trim())
-      || new Set(source.provenance_ids).size !== source.provenance_ids.length))
-    || source.evidence_file !== path.basename(evidenceFile)
-    || source.evidence_sha256 !== analyticEvidenceSha256(evidence)) {
-    throw new Error(`Analytic evidence receipt source ${kind} did not match ${path.basename(evidenceFile)}.`);
-  }
-};
-
-const publicReceiptSource = (source) => ({
-  kind: source.kind,
-  source: source.source.trim(),
-  scope: source.scope.trim(),
-  window: {
-    start: source.window.start,
-    end: source.window.end,
-  },
-  ...(Array.isArray(source.provenance_ids)
-    ? { provenance_ids: source.provenance_ids.map((id) => id.trim()) }
-    : {}),
-  evidence_sha256: source.evidence_sha256,
-  evidence_file: source.evidence_file,
-});
-
-const validateAnalyticEvidenceCompanions = async ({ artifact, runtimeArtifact, slidePath, receiptContract }) => {
-  if (!isRecord(runtimeArtifact)) {
-    return { ok: false, reason: 'The runtime did not return the required analytic artifact companion paths.' };
-  }
-  try {
-    const slideDirectory = path.dirname(slidePath);
-    await requireRegularCompanion(slidePath, 'slideFile', slidePath, slideDirectory);
-    if (runtimeArtifact.slideFile !== slidePath) {
-      throw new Error('runtime artifact.slideFile must match analytic.slideFile.');
-    }
-    const analyticArtifactFile = await requireRegularCompanion(
-      runtimeArtifact.analyticArtifactFile,
-      'analyticArtifactFile',
-      `${slidePath}.artifact.json`,
-      slideDirectory,
-    );
-    const analyticReceiptFile = await requireRegularCompanion(
-      runtimeArtifact.analyticReceiptFile,
-      'analyticReceiptFile',
-      `${slidePath}.evidence.json`,
-      slideDirectory,
-    );
-    const analyticLocalEvidenceFile = await requireRegularCompanion(
-      runtimeArtifact.analyticLocalEvidenceFile,
-      'analyticLocalEvidenceFile',
-      `${slidePath}.local-evidence.json`,
-      slideDirectory,
-    );
-    const analyticSensorEvidenceFile = runtimeArtifact.analyticSensorEvidenceFile !== undefined
-      ? await requireRegularCompanion(
-          runtimeArtifact.analyticSensorEvidenceFile,
-          'analyticSensorEvidenceFile',
-          `${slidePath}.sensor-evidence.json`,
-          slideDirectory,
-        )
-      : undefined;
-    const analyticBenchmarkEvidenceFile = runtimeArtifact.analyticBenchmarkEvidenceFile !== undefined
-      ? await requireRegularCompanion(
-          runtimeArtifact.analyticBenchmarkEvidenceFile,
-          'analyticBenchmarkEvidenceFile',
-          `${slidePath}.benchmark-evidence.json`,
-          slideDirectory,
-        )
-      : undefined;
-
-    const [slideHtml, artifactSnapshot, receipt, localEvidence, sensorEvidence, benchmarkEvidence] = await Promise.all([
-      readFile(slidePath, 'utf8'),
-      readJsonCompanion(analyticArtifactFile, 'Analytic artifact companion'),
-      readJsonCompanion(analyticReceiptFile, 'Analytic evidence receipt'),
-      readJsonCompanion(analyticLocalEvidenceFile, 'Analytic local evidence companion'),
-      analyticSensorEvidenceFile
-        ? readJsonCompanion(analyticSensorEvidenceFile, 'Analytic sensor evidence companion')
-        : Promise.resolve(undefined),
-      analyticBenchmarkEvidenceFile
-        ? readJsonCompanion(analyticBenchmarkEvidenceFile, 'Analytic benchmark evidence companion')
-        : Promise.resolve(undefined),
-    ]);
-    if (!isRecord(artifactSnapshot) || canonicalJson(artifactSnapshot) !== canonicalJson(artifact)) {
-      throw new Error('Analytic artifact companion did not match analytic.artifact.');
-    }
-    if (!isRecord(localEvidence)) throw new Error('Analytic local evidence companion must contain a JSON object.');
-    const receiptV2 = receiptContract === 'density.analytic-evidence-receipt.v2';
-    if (!isRecord(receipt)
-      || receipt.contract !== receiptContract
-      || receipt.generated_by !== 'density_question_pipeline'
-      || receipt.artifact_sha256 !== analyticEvidenceSha256(artifact)
-      || (receiptV2 && (typeof receipt.presentation_sha256 !== 'string'
-        || !/^[a-f0-9]{64}$/.test(receipt.presentation_sha256)))
-      || !Array.isArray(receipt.sources)) {
-      throw new Error('Analytic evidence receipt did not match the trusted question pipeline contract.');
-    }
-    if (receiptV2) {
-      const receiptScript = /<script type="application\/json" id="density-analytic-evidence-receipt">([\s\S]*?)<\/script>\n?/;
-      const embeddedMatch = slideHtml.match(receiptScript);
-      if (!embeddedMatch) throw new Error('Analytic slide did not embed its evidence receipt.');
-      let embeddedReceipt;
-      try {
-        embeddedReceipt = JSON.parse(embeddedMatch[1]);
-      } catch {
-        throw new Error('Analytic slide embedded an invalid evidence receipt.');
-      }
-      if (canonicalJson(embeddedReceipt) !== canonicalJson(receipt)) {
-        throw new Error('Embedded and sidecar analytic evidence receipts did not match.');
-      }
-      const presentationHtml = slideHtml.replace(receiptScript, '');
-      if (receipt.presentation_sha256 !== analyticPresentationSha256(presentationHtml)) {
-        throw new Error('Analytic presentation digest did not match the displayed slide.');
-      }
-    }
-    const localSources = receipt.sources.filter((source) => source?.kind === 'local_customer_data');
-    const sensorSources = receipt.sources.filter((source) => source?.kind === 'density_sensor_health_api');
-    const benchmarkSources = receipt.sources.filter((source) => source?.kind === 'density_benchmark_api');
-    const benchmarkEvidenceUsed = benchmarkSources.length === 1;
-    const sensorEvidenceUsed = sensorSources.length === 1;
-    if (localSources.length !== 1 || sensorSources.length > (receiptV2 ? 1 : 0) || benchmarkSources.length > 1
-      || receipt.sources.length !== 1 + sensorSources.length + benchmarkSources.length
-      || Boolean(analyticSensorEvidenceFile) !== sensorEvidenceUsed
-      || Boolean(analyticBenchmarkEvidenceFile) !== benchmarkEvidenceUsed) {
-      throw new Error('Analytic evidence receipt must contain the exact local, sensor-health, and benchmark sources used.');
-    }
-    validateReceiptSource(localSources[0], 'local_customer_data', analyticLocalEvidenceFile, localEvidence, receiptV2);
-    if (sensorEvidenceUsed) {
-      if (!isRecord(sensorEvidence)) throw new Error('Analytic sensor evidence companion must contain a JSON object.');
-      validateReceiptSource(sensorSources[0], 'density_sensor_health_api', analyticSensorEvidenceFile, sensorEvidence, true);
-    }
-    if (benchmarkEvidenceUsed) {
-      if (!isRecord(benchmarkEvidence)) throw new Error('Analytic benchmark evidence companion must contain a JSON object.');
-      validateReceiptSource(benchmarkSources[0], 'density_benchmark_api', analyticBenchmarkEvidenceFile, benchmarkEvidence, receiptV2);
-    }
-    if (receiptV2) {
-      const artifactProvenanceIds = new Set((artifact.data_provenance ?? [])
-      .map((entry) => entry?.id)
-      .filter((id) => typeof id === 'string' && id.trim()));
-      const boundProvenanceIds = new Set();
-      for (const source of receipt.sources) {
-        for (const id of source.provenance_ids) {
-          if (!artifactProvenanceIds.has(id)) {
-            throw new Error(`Analytic evidence receipt references unknown provenance id '${id}'.`);
-          }
-          if (boundProvenanceIds.has(id)) throw new Error(`Analytic evidence receipt repeats provenance id '${id}'.`);
-          boundProvenanceIds.add(id);
-        }
-      }
-      if (boundProvenanceIds.size !== artifactProvenanceIds.size) {
-        throw new Error('Analytic evidence receipt did not bind every artifact provenance id.');
-      }
-      if (sensorEvidenceUsed
-        && (sensorSources[0].provenance_ids.length !== 1 || sensorSources[0].provenance_ids[0] !== 'sensor_status_live')) {
-        throw new Error('Analytic sensor evidence must bind sensor_status_live only.');
-      }
-      if (benchmarkEvidenceUsed
-        && (benchmarkSources[0].provenance_ids.length !== 1 || benchmarkSources[0].provenance_ids[0] !== 'density_benchmark')) {
-        throw new Error('Analytic benchmark evidence must bind density_benchmark only.');
-      }
-      if (localSources[0].provenance_ids.some((id) => id === 'sensor_status_live' || id === 'density_benchmark')) {
-        throw new Error('Analytic local evidence cannot bind cloud sensor or benchmark provenance.');
-      }
-    }
-    const paths = {
-      slideFile: slidePath,
-      analyticArtifactFile,
-      analyticReceiptFile,
-      analyticLocalEvidenceFile,
-      ...(analyticSensorEvidenceFile ? { analyticSensorEvidenceFile } : {}),
-      ...(analyticBenchmarkEvidenceFile ? { analyticBenchmarkEvidenceFile } : {}),
-    };
-    return {
-      ok: true,
-      paths,
-      evidenceReceipt: {
-        contract: receipt.contract,
-        generated_by: receipt.generated_by,
-        artifact_sha256: receipt.artifact_sha256,
-        ...(receipt.presentation_sha256 ? { presentation_sha256: receipt.presentation_sha256 } : {}),
-        sources: receipt.sources.map(publicReceiptSource),
-        ...paths,
+    scope: {
+      organizationSelected: Boolean(state.organizationId),
+      buildingSelection: {
+        persisted: false,
+        selected: null,
+        inventoryTool: 'available_buildings',
       },
-    };
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-  }
-};
-
-const normalizeAnalyticPayload = async ({
-  analytic,
-  panelTarget,
-  runtimeArtifact,
-  question,
-  requestedMode,
-  capabilities,
-  required = false,
-}) => {
-  if (analytic === undefined) {
-    return required
-      ? { ok: false, reason: 'Density did not return a validated analytic artifact.' }
-      : { ok: true, analytic: undefined, panelTarget: undefined };
-  }
-  if (!isRecord(analytic) || !isRecord(analytic.artifact)) {
-    return { ok: false, reason: 'Density did not return a validated analytic artifact.' };
-  }
-  const artifact = analytic.artifact;
-  const privateTopLevelFields = ['provenance', 'raw_provenance']
-    .filter((field) => Object.hasOwn(artifact, field));
-  if (privateTopLevelFields.length > 0) {
-    return {
-      ok: false,
-      reason: `${privateTopLevelFields.join(', ')} are not part of the analytic artifact contract.`,
-    };
-  }
-  if (!analyticQuestionIdentity(artifact.question)
-    || analyticQuestionIdentity(artifact.question) !== analyticQuestionIdentity(question)) {
-    return { ok: false, reason: 'analytic.artifact.question did not match the requested question.' };
-  }
-  if (!['supported', 'context_needed', 'blocked'].includes(artifact.confidence)) {
-    return { ok: false, reason: 'analytic.artifact.confidence was not a supported analytic state.' };
-  }
-  if (!['text', 'chart', 'slide'].includes(artifact.response_mode)) {
-    return { ok: false, reason: 'analytic.artifact.response_mode must be text, chart, or slide.' };
-  }
-  const gates = validatedAnalyticGates(analytic.gates);
-  if (gates === undefined) {
-    return { ok: false, reason: 'analytic.gates did not contain exactly the ordered gate sequence 1 through 5.' };
-  }
-  const dataProvenance = validatedDataProvenance(artifact.data_provenance);
-  if (!dataProvenance
-    || typeof artifact.source !== 'string'
-    || !artifact.source.trim()
-    || typeof artifact.methodology !== 'string'
-    || !artifact.methodology.trim()
-    || (artifact.limitations !== undefined
-      && (!Array.isArray(artifact.limitations)
-        || artifact.limitations.some((entry) => typeof entry !== 'string' || !entry.trim())))) {
-    return { ok: false, reason: 'analytic.artifact trust fields did not match the validated artifact contract.' };
-  }
-  if (artifact.confidence === 'supported'
-    && (typeof artifact.headline !== 'string'
-      || !artifact.headline.trim()
-      || typeof artifact.subtitle !== 'string'
-      || !artifact.subtitle.trim())) {
-    return { ok: false, reason: 'A supported artifact must include a non-empty headline and subtitle.' };
-  }
-  if (artifact.confidence === 'context_needed'
-    && (typeof artifact.measured_observation !== 'string'
-      || !artifact.measured_observation.trim()
-      || typeof artifact.follow_up_question !== 'string'
-      || !artifact.follow_up_question.trim())) {
-    return { ok: false, reason: 'A context_needed artifact must include measured_observation and follow_up_question.' };
-  }
-  const qualityFields = normalizedAnalyticQualityFields(artifact);
-  if (!qualityFields.ok) return qualityFields;
-  const publicArtifact = publicAnalyticArtifact(artifact, dataProvenance, qualityFields.fields);
-  const recordId = learningRecordId(analytic.learningRecordId);
-  if (recordId === null) return { ok: false, reason: 'analytic.learningRecordId did not match the Density learning record id contract.' };
-  if (analytic.learningWarning !== undefined
-    && (typeof analytic.learningWarning !== 'string' || !analytic.learningWarning.trim())) {
-    return { ok: false, reason: 'analytic.learningWarning must be a non-empty string when present.' };
-  }
-
-  const supportedSlide = artifact.confidence === 'supported' && artifact.response_mode === 'slide';
-  const receiptCapability = supportedSlide
-    ? analyticReceiptCapability(capabilities)
-    : { ok: true, required: false };
-  if (!receiptCapability.ok) return receiptCapability;
-  const legacyReceipt = receiptCapability.contract === 'density.analytic-evidence-receipt.v1';
-
-  let normalizedTarget;
-  if (analytic.slideFile !== undefined || runtimeArtifact?.slideFile !== undefined || panelTarget !== undefined) {
-    const target = validatedSlideTarget(analytic, panelTarget, runtimeArtifact);
-    if (!target.ok) return target;
-    normalizedTarget = target;
-  }
-  const unsupportedMode = requestedMode === 'slide'
-    && artifact.confidence === 'supported'
-    && (artifact.response_mode !== 'slide' || legacyReceipt);
-  if (requestedMode === 'slide' && artifact.confidence === 'supported'
-    && artifact.response_mode === 'slide' && !normalizedTarget && !legacyReceipt) {
-    return { ok: false, reason: 'A supported slide artifact requires a validated slide file and panel target.' };
-  }
-  let companionValidation;
-  if (receiptCapability.required && supportedSlide) {
-    if (!normalizedTarget) {
-      return { ok: false, reason: 'A trusted analytic evidence receipt requires a validated slide target.' };
-    }
-    companionValidation = await validateAnalyticEvidenceCompanions({
-      artifact,
-      runtimeArtifact,
-      slidePath: normalizedTarget.slidePath,
-      receiptContract: receiptCapability.contract,
-    });
-    if (!companionValidation.ok) return companionValidation;
-  }
-  if (legacyReceipt) normalizedTarget = undefined;
-  const deliveredMode = normalizedTarget
-    ? 'slide'
-    : artifact.response_mode === 'chart'
-      ? 'chart'
-      : 'text';
-  const trustContext = analyticTrustContext({
-    artifact: publicArtifact,
-    capabilities,
-    gates,
-    dataProvenance,
-    evidenceReceipt: companionValidation?.evidenceReceipt,
-  });
-  return {
-    ok: true,
-    artifact: publicArtifact,
-    gates,
-    trustContext,
-    learningRecordId: recordId,
-    learningWarning: typeof analytic.learningWarning === 'string' ? analytic.learningWarning.trim() : undefined,
-    reviewNextAction: reviewLearningNextAction(recordId),
-    analyticState: unsupportedMode ? 'unsupported_mode' : artifact.confidence,
-    unsupportedMode,
-    deliveredMode,
-    ...(companionValidation ? {
-      companionPaths: companionValidation.paths,
-      evidenceReceipt: companionValidation.evidenceReceipt,
-    } : {}),
-    analytic: {
-      artifact: publicArtifact,
-      gates,
-      ...(typeof analytic.chatHtml === 'string' ? { chatHtml: analytic.chatHtml } : {}),
-      ...(typeof analytic.chatHtmlDark === 'string' ? { chatHtmlDark: analytic.chatHtmlDark } : {}),
-      ...(recordId ? { learningRecordId: recordId } : {}),
-      ...(typeof analytic.learningWarning === 'string' ? { learningWarning: analytic.learningWarning.trim() } : {}),
-      ...(normalizedTarget ? { slideFile: normalizedTarget.slidePath } : {}),
-      ...(companionValidation ? {
-        ...companionValidation.paths,
-        evidenceReceipt: companionValidation.evidenceReceipt,
-      } : {}),
     },
-    panelTarget: normalizedTarget?.panelTarget,
-  };
-};
-
-export async function analyticSlide(args = {}) {
-  const question = analyticSlideQuestion(args.question);
-  const dataDir = analyticSlideDataDir(args.dataDir);
-  const deadline = createHistoricalQuestionDeadline(args.timeoutMs ?? 30000);
-  const base = { question, dataDir, requestedMode: 'slide' };
-  const timedOutResponse = () => ({
-    ...base,
-    ok: false,
-    timedOut: true,
-    deliveredMode: 'none',
-    validationState: 'unavailable',
-    analyticState: 'unavailable',
-    message: `Density could not produce the analytic slide inside the ${deadline.timeoutMs}ms wall-time budget.`,
-    performance: { elapsedMs: Date.now() - deadline.startedAt, targetMs: deadline.timeoutMs },
-  });
-  const invalidResponse = (message, extra = {}) => ({
-    ...base,
-    ok: false,
-    deliveredMode: 'none',
-    validationState: 'invalid',
-    analyticState: 'invalid',
-    message,
-    ...extra,
-  });
-  const cli = await requireCli();
-  let remainingMs = deadline.remainingMs();
-  if (remainingMs <= 0) return timedOutResponse();
-  const capabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs: remainingMs });
-  if (deadline.remainingMs() <= 0 || (!capabilities.checked && /timed out/i.test(capabilities.reason ?? ''))) {
-    return timedOutResponse();
-  }
-  if (!supportsAnalyticArtifact(capabilities, 'slide')) {
-    return {
-      ...base,
-      ok: false,
-      unsupported: true,
-      deliveredMode: 'none',
-      validationState: 'unavailable',
-      analyticState: 'unsupported',
-      cli: safeCliInfo(cli),
-      capabilities,
-      message: 'This Density CLI does not support validated analytic slide artifacts yet.',
-    };
-  }
-  const themeRequest = await prepareAnalyticThemeRequest({
-    question,
-    dataDir,
-    cli,
-    capabilities,
-    remainingMs: deadline.remainingMs,
-    explicitTheme: args.theme,
-    priorChart: readChartContext(dataDir),
-  });
-  if (themeRequest.state === 'response') {
-    const response = themeRequest.response;
-    const clarification = Boolean(response.clarificationRequest);
-    return {
-      ...base,
-      ...response,
-      deliveredMode: clarification ? 'clarification' : 'none',
-      validationState: clarification ? 'clarification_required' : response.ok ? 'preference_updated' : 'unavailable',
-      analyticState: clarification ? 'clarification_required' : response.ok ? 'preference_updated' : 'unavailable',
-      cli: safeCliInfo(cli),
-      capabilities,
-    };
-  }
-  const renderQuestion = themeRequest.question;
-  const theme = themeRequest.theme;
-  remainingMs = deadline.remainingMs();
-  if (remainingMs <= 0) return timedOutResponse();
-  const result = await runDensity(cli, ['question', renderQuestion, '--slide', ...(theme === undefined ? [] : ['--theme', theme]), '--format', 'ui'], {
-    dataDir,
-    allowFailure: true,
-    timeoutMs: remainingMs,
-  });
-  if (result.timedOut || deadline.remainingMs() <= 0) return timedOutResponse();
-  if (result.code !== 0) {
-    return {
-      ...base,
-      ok: false,
-      deliveredMode: 'none',
-      validationState: 'unavailable',
-      analyticState: 'unavailable',
-      error: oneLine(result.stderr || result.stdout),
-    };
-  }
-  let ui;
-  try {
-    ui = parseJsonOutput(result.stdout, 'Density analytic slide response');
-  } catch (error) {
-    return invalidResponse(error.message);
-  }
-  if (!isRecord(ui) || ui.kind !== 'density.agent-ui') {
-    return invalidResponse('Density analytic slide response did not use the density.agent-ui payload contract.');
-  }
-  if (ui.clarificationRequest !== undefined) {
-    const clarificationRequest = publicClarificationRequest(ui.clarificationRequest);
-    if (!clarificationRequest) {
-      return invalidResponse('clarificationRequest did not match the density.clarification contract.');
-    }
-    return {
-      ...base,
-      ok: false,
-      deliveredMode: 'clarification',
-      validationState: 'clarification_required',
-      analyticState: 'clarification_required',
-      clarificationRequest,
-      message: clarificationRequest.prompt,
-      cli: safeCliInfo(cli),
-      capabilities,
-    };
-  }
-  const normalized = await normalizeAnalyticPayload({
-    analytic: ui.analytic,
-    panelTarget: ui.panelTarget,
-    runtimeArtifact: isRecord(ui.artifact) ? ui.artifact : ui.artifacts,
-    question: renderQuestion,
-    requestedMode: 'slide',
-    capabilities,
-    required: true,
-  });
-  if (!normalized.ok) return invalidResponse(normalized.reason);
-  const { artifact } = normalized;
-  const summary = {
-    ...base,
-    ...(themeRequest.followUp ? { followUp: themeRequest.followUp } : {}),
-    headline: artifact.headline,
-    subtitle: artifact.subtitle,
-    confidence: artifact.confidence,
-    validationState: 'rendered',
-    analyticState: normalized.analyticState,
-    generatedMode: normalized.deliveredMode,
-    trustContext: normalized.trustContext,
-    ...(normalized.learningRecordId ? { learningRecordId: normalized.learningRecordId } : {}),
-    ...(normalized.learningWarning ? { learningWarning: normalized.learningWarning } : {}),
-    ...(normalized.reviewNextAction ? { reviewNextAction: { ...normalized.reviewNextAction, args: { ...normalized.reviewNextAction.args, dataDir } } } : {}),
-  };
-  if (normalized.unsupportedMode) {
-    return {
-      ...summary,
-      ok: false,
-      unsupportedMode: true,
-      deliveredMode: 'text',
-      message: 'Density returned a validated text answer, but this question does not currently support a slide.',
-    };
-  }
-  if (artifact.confidence === 'context_needed') {
-    return {
-      ...summary,
-      ok: false,
-      deliveredMode: normalized.deliveredMode,
-      measuredObservation: artifact.measured_observation.trim(),
-      followUpQuestion: artifact.follow_up_question.trim(),
-      message: artifact.follow_up_question.trim(),
-    };
-  }
-  if (artifact.confidence === 'blocked') {
-    return {
-      ...summary,
-      ok: false,
-      deliveredMode: normalized.deliveredMode,
-      message: typeof artifact.measured_observation === 'string' && artifact.measured_observation.trim()
-        ? artifact.measured_observation.trim()
-        : 'The validated analytic result is blocked and did not produce a slide.',
-    };
-  }
-  const response = {
-    ...summary,
-    ok: true,
-    deliveredMode: 'none',
-    deliveryState: 'generated',
-    slidePath: normalized.analytic.slideFile,
-    panelTarget: normalized.panelTarget,
-    ...(normalized.companionPaths ?? {}),
-    ...(normalized.evidenceReceipt ? { evidenceReceipt: normalized.evidenceReceipt } : {}),
-  };
-  rememberChartContext(dataDir, { ...response, question: renderQuestion });
-  return response;
-}
-
-export const ANALYTIC_LEARNING_LABELS = Object.freeze([
-  'gold_standard',
-  'good_with_fixes',
-  'useful_redesign_required',
-  'reject',
-  'blocked_missing_data',
-]);
-
-const DEFAULT_ANALYTIC_LEARNING_LIMIT = 25;
-const MAX_ANALYTIC_LEARNING_LIMIT = 100;
-
-const analyticLearningLimit = (value) => {
-  if (value === undefined) return DEFAULT_ANALYTIC_LEARNING_LIMIT;
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_ANALYTIC_LEARNING_LIMIT) {
-    throw new Error(`limit must be an integer between 1 and ${MAX_ANALYTIC_LEARNING_LIMIT}.`);
-  }
-  return value;
-};
-
-const analyticLearningOffset = (value) => {
-  if (value === undefined) return 0;
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error('offset must be a non-negative integer.');
-  }
-  return value;
-};
-
-const learningTimeoutMs = (value) => {
-  const timeoutMs = value === undefined ? 10000 : Number(value);
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120000) {
-    throw new Error('timeoutMs must be a positive number no greater than 120000.');
-  }
-  return timeoutMs;
-};
-
-const optionalLearningText = (value, field) => {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value.trim() || value.includes('\0')) {
-    throw new Error(`${field} must be a non-empty string without null bytes.`);
-  }
-  if (value.length > 10000) throw new Error(`${field} must be 10000 characters or fewer.`);
-  return value.trim();
-};
-
-const validatedLearningRecord = (record) => {
-  if (!isRecord(record)) return undefined;
-  const id = learningRecordId(record.id);
-  if (!id
-    || typeof record.recorded_at !== 'string'
-    || Number.isNaN(Date.parse(record.recorded_at))
-    || !['clarification', 'artifact_review'].includes(record.record_type)
-    || typeof record.measured_observation !== 'string'
-    || !record.measured_observation.trim()
-    || typeof record.artifact_ref !== 'string'
-    || !/^sha256:[0-9a-f]{64}$/i.test(record.artifact_ref)) {
-    return undefined;
-  }
-  return {
-    ...record,
-    id,
-    measured_observation: record.measured_observation.trim(),
-  };
-};
-
-const compactLearningRecord = (record) => ({
-  id: record.id,
-  recorded_at: record.recorded_at,
-  record_type: record.record_type,
-  measured_observation: record.measured_observation,
-  ...(record.follow_up_question !== undefined ? { follow_up_question: record.follow_up_question } : {}),
-  artifact_ref: record.artifact_ref,
-  ...(record.customer_answer !== undefined ? { customer_answer: record.customer_answer } : {}),
-  ...(record.final_interpretation !== undefined ? { final_interpretation: record.final_interpretation } : {}),
-  ...(record.reviewer_label !== undefined ? { reviewer_label: record.reviewer_label } : {}),
-  ...(record.resolved_at !== undefined ? { resolved_at: record.resolved_at } : {}),
-});
-
-export async function listAnalyticLearningRecords(args = {}) {
-  const dataDir = analyticSlideDataDir(args.dataDir);
-  const timeoutMs = learningTimeoutMs(args.timeoutMs);
-  const limit = analyticLearningLimit(args.limit);
-  const offset = analyticLearningOffset(args.offset);
-  const cli = await requireCli();
-  const result = await runDensity(cli, [
-    'learning',
-    'list',
-    '--data-dir', dataDir,
-    '--compact',
-    '--limit', String(limit),
-    '--offset', String(offset),
-    '--format', 'json',
-  ], {
-    dataDir,
-    allowFailure: true,
-    timeoutMs,
-  });
-  if (result.code !== 0 || result.timedOut) {
-    return {
-      ok: false,
-      unsupported: !result.timedOut,
-      dataDir,
-      error: result.timedOut ? 'Density analytic learning list timed out.' : oneLine(result.stderr || result.stdout),
-      nextAction: { id: 'update_cli_for_analytic_learning', label: 'Update the Density runtime to use the analytic learning workflow.' },
-    };
-  }
-  const payload = parseJsonOutput(result.stdout, 'Density analytic learning response');
-  if (!isRecord(payload) || !Array.isArray(payload.records) || !Array.isArray(payload.corruptLines)) {
-    throw new Error('Density analytic learning response did not match the list contract.');
-  }
-  const validatedRecords = payload.records.map(validatedLearningRecord);
-  if (validatedRecords.some((record) => record === undefined)) {
-    throw new Error('Density analytic learning response contained a malformed record.');
-  }
-  if (!Number.isSafeInteger(payload.total)
-    || payload.total < 0
-    || payload.limit !== limit
-    || payload.offset !== offset
-    || typeof payload.hasMore !== 'boolean') {
-    throw new Error('Density analytic learning response did not include valid pagination metadata.');
-  }
-  if (validatedRecords.length > limit) {
-    throw new Error('Density analytic learning response exceeded the requested limit.');
-  }
-  const records = validatedRecords.map(compactLearningRecord);
-  if (payload.hasMore
-    && (!Number.isSafeInteger(payload.nextOffset)
-      || payload.nextOffset !== offset + records.length
-      || payload.nextOffset <= offset)) {
-    throw new Error('Density analytic learning response did not include an actionable nextOffset.');
-  }
-  if (!payload.hasMore && payload.nextOffset !== undefined) {
-    throw new Error('Density analytic learning response included nextOffset without additional records.');
-  }
-  return {
-    ok: true,
-    dataDir,
-    limit,
-    offset,
-    total: payload.total,
-    hasMore: payload.hasMore,
-    ...(payload.hasMore ? { nextOffset: payload.nextOffset } : {}),
-    records,
-    corruptLines: payload.corruptLines,
-    cli: safeCliInfo(cli),
-  };
-}
-
-export async function reviewAnalyticLearningRecord(args = {}) {
-  const id = learningRecordId(args.id);
-  if (!id) throw new Error('id must be a valid Density analytic learning record id.');
-  const answer = optionalLearningText(args.answer, 'answer');
-  const interpretation = optionalLearningText(args.interpretation, 'interpretation');
-  const label = args.label === undefined ? undefined : String(args.label);
-  if (label !== undefined && !ANALYTIC_LEARNING_LABELS.includes(label)) {
-    throw new Error(`label must be one of: ${ANALYTIC_LEARNING_LABELS.join(', ')}.`);
-  }
-  if (answer === undefined && interpretation === undefined && label === undefined) {
-    throw new Error('An analytic learning review requires an answer, interpretation, or label.');
-  }
-  const dataDir = analyticSlideDataDir(args.dataDir);
-  const timeoutMs = learningTimeoutMs(args.timeoutMs);
-  const cli = await requireCli();
-  const command = ['learning', 'review', '--id', id, '--data-dir', dataDir];
-  if (answer !== undefined) command.push('--answer', answer);
-  if (interpretation !== undefined) command.push('--interpretation', interpretation);
-  if (label !== undefined) command.push('--label', label);
-  const result = await runDensity(cli, command, { dataDir, allowFailure: true, timeoutMs });
-  if (result.code !== 0 || result.timedOut) {
-    return {
-      ok: false,
-      unsupported: !result.timedOut,
-      id,
-      dataDir,
-      error: result.timedOut ? 'Density analytic learning review timed out.' : oneLine(result.stderr || result.stdout),
-    };
-  }
-  return {
-    ok: true,
-    id,
-    dataDir,
-    ...(label ? { label } : {}),
-    reviewed: true,
-    message: oneLine(result.stdout) || `Reviewed learning record ${id}.`,
-    cli: safeCliInfo(cli),
+    sync: {
+      latestSyncAt,
+      streams,
+      backgroundDeepSync: backgroundDeepSync ?? { status: 'not_started' },
+    },
+    storage: {
+      duckdbBytes: storage.duckdbBytes,
+      parquetBytes: parquet.parquetBytes,
+      localDataBytes: storage.duckdbBytes + parquet.parquetBytes,
+      parquetFiles: parquet.parquetFiles,
+      newestParquetModifiedAt: parquet.newestParquetModifiedAt,
+      canonicalParquetReady: storage.parquetReady,
+      fastQuestionsReady: storage.fastQuestionsReady,
+    },
+    readiness: {
+      localDataReady,
+      status: localDataReady ? 'ready' : 'sync_required',
+      reason: localDataReady ? undefined : 'Required local Parquet tables are missing.',
+    },
+    nextAction: localDataReady ? undefined : {
+      tool: 'onboard_customer',
+      args: { dataDir, days: DEFAULT_METRICS_DAYS, fullSync: true, backgroundDeepSync: true },
+    },
   };
 }
 
@@ -3441,367 +1480,6 @@ export async function floorUsageReport(args = {}) {
     dataDir,
     cli: safeCliInfo(cli),
     userVisiblePrimaryActions: 0,
-  };
-}
-
-export async function localUtilizationQuery(args = {}) {
-  const question = String(args.question || '').trim();
-  const presentation = resolvePresentation(args.presentation, 'slide');
-  const dataDir = resolveDataDir(args.dataDir);
-  const priorChart = readChartContext(dataDir);
-  const chartFollowUp = isChartFollowUpQuestion(question) ? priorChart : undefined;
-  const contextualFollowUp = isContextualAnalyticsFollowUp(question) ? priorChart : undefined;
-  const needsFloorplan = floorplanArtifactIntent(question);
-  const metadataIntent = metadataQuestionIntent(question);
-  const metadataRouting = metadataQuestionRouting(metadataIntent);
-  if (sensorHealthIntent(question)) {
-    const response = await sensorHealthReport(args);
-    return {
-      ...response,
-      tool: 'local_utilization_query',
-      routedTool: 'sensor_health_report',
-      intent: 'sensor_health',
-      routing: {
-        fromTool: 'local_utilization_query',
-        routedTool: 'sensor_health_report',
-        intent: 'sensor_health',
-        reason: 'Question asked about sensor or live signal health, which is cloud-only.',
-      },
-    };
-  }
-  if (sensorSubjectIntent(question) && !historicalSensorUtilizationIntent(question)) {
-    return {
-      ...unsupportedSensorQuestionResponse(question),
-      tool: 'local_utilization_query',
-      intent: 'unsupported_sensor_question',
-    };
-  }
-  if (currentAvailabilityIntent(question) && !metadataIntent && !contextualFollowUp && !chartFollowUp) {
-    const response = await liveWayfindingStatus({
-      ...args,
-      query: question,
-      dataDir,
-      floorplanArtifactRequired: needsFloorplan,
-    });
-    return {
-      ...response,
-      tool: 'local_utilization_query',
-      routedTool: 'live_wayfinding_status',
-      routedSkill: 'wayfinding',
-      intent: needsFloorplan ? 'live_wayfinding_floorplan' : 'live_wayfinding',
-      chartSuppressed: true,
-      artifactRequired: needsFloorplan ? 'floorplan' : undefined,
-      routing: {
-        fromTool: 'local_utilization_query',
-        routedTool: 'live_wayfinding_status',
-        routedSkill: 'wayfinding',
-        intent: needsFloorplan ? 'live_wayfinding_floorplan' : 'live_wayfinding',
-        reason: 'Question used current-state availability wording, so historical local utilization was not used.',
-      },
-    };
-  }
-  if (needsFloorplan) {
-    const response = await floorUsageReport({ ...args, question, dataDir });
-    return {
-      ...response,
-      tool: 'local_utilization_query',
-      routedTool: 'floor_usage_report',
-      routing: {
-        fromTool: 'local_utilization_query',
-        routedTool: 'floor_usage_report',
-        routedSkill: 'floorplan',
-        intent: 'floorplan_artifact',
-        reason: 'Question asked for a spatial floorplan artifact, so the generic chart path was not used.',
-      },
-    };
-  }
-  if (dataHealthIntent(question) && metadataIntent !== 'local_data_freshness') {
-    const healthIntent = !dataCoverageIntent(question);
-    const profile = healthIntent
-      ? await dataHealthReport({ dataDir, window: question })
-      : await localDataProfile({ dataDir, window: question });
-    const firstTimestamp = cleanCoverageValue(profile.freshness?.firstTimestamp);
-    const lastTimestamp = cleanCoverageValue(profile.freshness?.lastTimestamp);
-    return {
-      ...profile,
-      tool: 'local_utilization_query',
-      routedTool: healthIntent ? 'data_health_report' : 'local_data_profile',
-      intent: healthIntent ? 'local_data_health' : 'local_data_coverage',
-      routing: {
-        fromTool: 'local_utilization_query',
-        routedTool: healthIntent ? 'data_health_report' : 'local_data_profile',
-        intent: healthIntent ? 'local_data_health' : 'local_data_coverage',
-        reason: healthIntent ? 'Question asked about trust, zeros, missing data, or freshness.' : 'Question asked what local historical data is available.',
-      },
-      question,
-      title: profile.ok ? 'Local historical data is available' : 'Local historical data is not ready yet',
-      subtitle: firstTimestamp && lastTimestamp
-        ? `Local timestamp coverage runs from ${firstTimestamp} to ${lastTimestamp}.`
-        : profile.freshness?.reason ?? 'Timestamp coverage could not be confirmed from local Parquet.',
-      provenance: localHistoricalProvenance({ dataDir, tool: 'local_utilization_query' }),
-    };
-  }
-  if (args.includeAnalyticArtifact !== true && (chartFollowUp?.chart || chartFollowUp?.html || chartFollowUp?.png)) {
-    return {
-      ...chartFollowUp,
-      ok: true,
-      question,
-      intent: 'chart_follow_up',
-      followUp: {
-        type: 'reuse_previous_chart',
-        previousQuestion: chartFollowUp.question,
-        reason: 'The question asked to show the previous answer as a chart.',
-      },
-      sourceLayer: SOURCE_LAYERS.localCustomerData,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
-      provenance: localHistoricalProvenance({ dataDir, tool: 'local_utilization_query' }),
-      benchmarkAffordance: {
-        sourceLayer: SOURCE_LAYERS.benchmarkNetworkContext,
-        sourceBadge: sourceBadgeFor(SOURCE_LAYERS.benchmarkNetworkContext),
-        label: 'Density benchmark network can add peer context when benchmark access is available.',
-        tool: 'benchmark_compare',
-      },
-    };
-  }
-  const deadline = createHistoricalQuestionDeadline(args.timeoutMs);
-  const remainingWallMs = deadline.remainingMs;
-  const timedOutResponse = () => historicalQuestionTimedOut({
-    question,
-    dataDir,
-    deadline,
-    intent: 'local_utilization_timeout',
-  });
-  const cli = await requireCli();
-  let analyticCapabilities;
-  if (presentation === 'slide' || args.includeAnalyticArtifact === true) {
-    const capabilityRemainingMs = remainingWallMs();
-    if (capabilityRemainingMs <= 0) return timedOutResponse();
-    analyticCapabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs: capabilityRemainingMs });
-  }
-  let routedQuestion = question;
-  let theme;
-  let themeFollowUp;
-  let clarificationConsumed = false;
-  if (presentation === 'slide' || args.includeAnalyticArtifact === true) {
-    const themeRequest = await prepareAnalyticThemeRequest({
-      question,
-      dataDir,
-      cli,
-      capabilities: analyticCapabilities,
-      remainingMs: remainingWallMs,
-      explicitTheme: args.theme,
-      clarificationAnswer: String(args.clarificationAnswer || '').trim(),
-      priorChart,
-    });
-    if (themeRequest.state === 'response') {
-      const response = {
-        ...themeRequest.response,
-        capabilities: analyticCapabilities,
-        cli: safeCliInfo(cli),
-        tool: 'local_utilization_query',
-      };
-      return {
-        ...response,
-        presentationDelivery: presentationDelivery({
-          requested: 'slide',
-          slideSupported: supportsAnalyticArtifact(analyticCapabilities, 'slide'),
-          response,
-        }),
-      };
-    }
-    routedQuestion = themeRequest.question;
-    theme = themeRequest.theme;
-    themeFollowUp = themeRequest.followUp;
-    clarificationConsumed = themeRequest.clarificationConsumed;
-  }
-  const clarificationAnswer = String(args.clarificationAnswer || '').trim();
-  if (clarificationAnswer && !clarificationConsumed) {
-    routedQuestion = `${routedQuestion} User clarification: ${clarificationAnswer}`;
-  }
-  const routedChartFollowUp = themeFollowUp ? undefined : (isChartFollowUpQuestion(routedQuestion) ? priorChart : undefined);
-  const routedContextualFollowUp = themeFollowUp ? undefined : (isContextualAnalyticsFollowUp(routedQuestion) ? priorChart : undefined);
-  const effectiveQuestion = themeFollowUp?.effectiveQuestion
-    ?? routedChartFollowUp?.question
-    ?? (routedContextualFollowUp?.question
-      ? rewriteContextualQuestion(routedQuestion, routedContextualFollowUp)
-      : routedQuestion);
-  const operatingHours = requestedOperatingHours(effectiveQuestion);
-  const followUp = themeFollowUp
-    ?? (routedChartFollowUp?.question
-      ? {
-          type: 'reuse_previous_chart',
-          previousQuestion: routedChartFollowUp.question,
-          effectiveQuestion,
-          reason: 'The question asked to show the previous answer as a chart, so the plugin reused the prior analytic question and reattached its canonical slide.',
-        }
-      : routedContextualFollowUp?.question
-        ? {
-            type: 'rewrite_contextual_question',
-            previousQuestion: routedContextualFollowUp.question,
-            effectiveQuestion,
-            reason: 'The question depended on the previous analytics answer, so the plugin preserved the prior scope and metric context before calling the CLI.',
-          }
-        : undefined);
-  const initialRemainingMs = remainingWallMs();
-  if (initialRemainingMs <= 0) return timedOutResponse();
-  const analyticArtifactSupported = supportsAnalyticArtifact(analyticCapabilities);
-  const useAnalyticSlide = presentation === 'slide' && supportsAnalyticArtifact(analyticCapabilities, 'slide');
-  const presentationFlag = useAnalyticSlide ? '--slide' : '--chart';
-  const themeArgs = theme === undefined ? [] : ['--theme', theme];
-  const cachedUiAnswer = await runDensity(cli, ['question', effectiveQuestion, '--cached', presentationFlag, ...themeArgs, '--format', 'ui'], {
-    dataDir,
-    allowFailure: true,
-    timeoutMs: initialRemainingMs,
-  });
-  if (cachedUiAnswer.timedOut) return timedOutResponse();
-  let uiAnswer = cachedUiAnswer;
-  if (!await cachedQuestionUiIsUsable(cachedUiAnswer)) {
-    const remainingMs = remainingWallMs();
-    if (remainingMs <= 0) return timedOutResponse();
-    uiAnswer = await runDensity(cli, ['question', effectiveQuestion, presentationFlag, ...themeArgs, '--format', 'ui'], {
-      dataDir,
-      allowFailure: true,
-      timeoutMs: remainingMs,
-    });
-  }
-  if (uiAnswer.timedOut) return timedOutResponse();
-  if (uiAnswer.code === 0) {
-    const remainingMs = remainingWallMs();
-    if (remainingMs <= 0) return timedOutResponse();
-    const response = await parseQuestionUiAnswer({
-      question: effectiveQuestion,
-      dataDir,
-      cli,
-      result: uiAnswer,
-      tool: 'local_utilization_query',
-      renderTimeoutMs: remainingMs,
-      analyticArtifactSupported,
-      analyticCapabilities,
-      includePanelTarget: useAnalyticSlide,
-    });
-    if (remainingWallMs() <= 0) return timedOutResponse();
-    const operatingHoursMismatch = operatingHours
-      && !operatingHoursMatch(response.effectiveScope?.operatingHours, operatingHours);
-    const responseWithRouting = {
-      ...response,
-      ...(analyticCapabilities ? { capabilities: analyticCapabilities } : {}),
-      question,
-      intent: metadataIntent ?? response.intent ?? 'local_utilization',
-      routedTool: metadataRouting?.routedTool ?? response.routedTool,
-      routing: metadataRouting ?? response.routing,
-      followUp,
-      ...(operatingHoursMismatch ? {
-        caveats: [
-          ...(Array.isArray(response.caveats) ? response.caveats : []),
-          `Requested operating hours ${operatingHours.label}, but the CLI reported ${response.effectiveScope?.operatingHours?.label ?? 'no operating-hours window'}; the requested window was not silently substituted.`,
-        ],
-      } : {}),
-      benchmarkAffordance: response.ok === false || metadataIntent
-        ? undefined
-        : {
-            sourceLayer: SOURCE_LAYERS.benchmarkNetworkContext,
-            sourceBadge: sourceBadgeFor(SOURCE_LAYERS.benchmarkNetworkContext),
-            label: 'Density benchmark network can add peer context when benchmark access is available.',
-            tool: 'benchmark_compare',
-          },
-    };
-    return {
-      ...responseWithRouting,
-      ...(presentation === 'slide'
-        ? {
-            presentationDelivery: presentationDelivery({
-              requested: 'slide',
-              slideSupported: useAnalyticSlide,
-              response: responseWithRouting,
-            }),
-          }
-        : {}),
-    };
-  }
-  const questionUiSupported = analyticCapabilities?.generativeUi?.renderer === 'json-render'
-    || analyticCapabilities?.commands?.questionUi;
-  if (questionUiSupported) {
-    return {
-      ok: false,
-      blocked: true,
-      question,
-      effectiveQuestion,
-      intent: 'local_utilization_blocked',
-      routedTool: 'local_utilization_query',
-      sourceLayer: SOURCE_LAYERS.localCustomerData,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
-      error: oneLine(uiAnswer.stderr || uiAnswer.stdout) || 'Density question UI failed after one recovery attempt.',
-      retryBudget: { attempts: 2, exhausted: true },
-      recovery: {
-        avoid: ['shell', 'DuckDB', 'SQL', 'manual Parquet scans', 'hand-built chart scripts'],
-      },
-    };
-  }
-  const result = await askChartWithinDeadline(
-    { ...args, question: effectiveQuestion, dataDir, presentation },
-    deadline,
-    analyticCapabilities,
-  );
-  if (result.timedOut) return timedOutResponse();
-  return {
-    ...result,
-    question,
-    intent: metadataIntent ?? result.intent,
-    routedTool: metadataRouting?.routedTool ?? result.routedTool,
-    routing: metadataRouting ?? result.routing,
-    followUp,
-    sourceLayer: SOURCE_LAYERS.localCustomerData,
-    sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
-    provenance: localHistoricalProvenance({ dataDir, tool: 'local_utilization_query' }),
-    benchmarkAffordance: result.ok && !metadataIntent
-      ? {
-          sourceLayer: SOURCE_LAYERS.benchmarkNetworkContext,
-          sourceBadge: sourceBadgeFor(SOURCE_LAYERS.benchmarkNetworkContext),
-          label: 'Density benchmark network can add peer context when benchmark access is available.',
-          tool: 'benchmark_compare',
-        }
-      : undefined,
-  };
-}
-
-export async function answerDensityQuestion(args = {}) {
-  const question = String(args.question || '').trim();
-  if (!question) throw new Error('question is required.');
-  const clarificationAnswer = String(args.clarificationAnswer || '').trim();
-  const presentation = resolvePresentation(args.presentation, 'slide');
-  const response = await localUtilizationQuery({
-    ...args,
-    question,
-    clarificationAnswer,
-    presentation,
-    includeAnalyticArtifact: presentation === 'slide',
-  });
-  const responseWithReadiness = response.intent === 'sensor_health'
-    || response.intent?.startsWith('analytic_theme_')
-    || response.ui
-    || response.timedOut
-    || response.blocked
-    ? response
-    : await attachBuildingReadiness(response, args);
-  const routedTool = response.routedTool ?? 'local_utilization_query';
-  return {
-    ...responseWithReadiness,
-    question,
-    ...(clarificationAnswer ? { clarificationAnswer } : {}),
-    tool: 'answer_density_question',
-    entrypoint: 'answer_density_question',
-    defaultEntrypoint: true,
-    intentHint: args.intentHint,
-    routedTool,
-    routing: {
-      fromTool: 'answer_density_question',
-      viaTool: 'local_utilization_query',
-      routedTool,
-      routedSkill: response.routing?.routedSkill ?? response.routedSkill,
-      intent: response.intent,
-      reason: response.routing?.reason ?? 'Default front-door route for ordinary Density questions.',
-    },
-    routerRouting: response.routing,
   };
 }
 
@@ -4206,207 +1884,93 @@ const validateAndAllowlistSensorResponse = async ({ response, question, elapsedM
 };
 
 export async function sensorHealthReport(args = {}) {
-  const startedAt = Date.now();
-  const dataDir = resolveDataDir(args.dataDir);
-  const contract = {
-    source: 'density_cloud_only',
-    noLocalDuckdbFallback: true,
-    rawStatusPreserved: true,
-    lifecycleMappingSource: ['sensor_locations', 'atlas_spaces_flat'],
-    benchmark: 'not_comparable',
-  };
-  if (args.organizationId || args.buildingId || args.floorId || (Array.isArray(args.spaceIds) && args.spaceIds.length > 0)) {
+  const mode = args.mode === undefined ? 'current' : String(args.mode);
+  if (mode !== 'current' && mode !== 'history') {
     return {
       ok: false,
       unsupported: true,
       sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
       sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
       sourceLabel: 'Density Sensor Health',
-      contract,
-      message: 'The current CLI sensor-health contract is organization-wide. Explicit ID scope was not applied, so no broader result was returned.',
+      message: `Sensor health mode '${mode}' is not supported. Use current or history.`,
+      userVisiblePrimaryActions: 0,
+    };
+  }
+  if (mode === 'history') {
+    if (typeof args.building !== 'string' || !args.building.trim()
+      || typeof args.start !== 'string' || !args.start.trim()
+      || typeof args.end !== 'string' || !args.end.trim()) {
+      return {
+        ok: false,
+        invalid: true,
+        sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
+        sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
+        sourceLabel: 'Density Sensor Health',
+        message: 'Historical sensor health requires building, start, and end.',
+        userVisiblePrimaryActions: 0,
+      };
+    }
+    if (args.floor !== undefined || args.status !== undefined || args.sensor !== undefined || args.includeSensors !== undefined) {
+      return {
+        ok: false,
+        invalid: true,
+        sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
+        sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
+        sourceLabel: 'Density Sensor Health',
+        message: 'Historical sensor health currently supports one building without floor, status, or sensor filters.',
+        userVisiblePrimaryActions: 0,
+      };
+    }
+    const response = await runCapabilityJsonCommand(args, {
+      capability: 'sensorHealthHistory',
+      cliArgs: [
+        'sensor-health', 'history',
+        '--building', args.building.trim(),
+        '--start', args.start.trim(),
+        '--end', args.end.trim(),
+        '--interval', args.interval === undefined ? 'day' : String(args.interval),
+        ...(args.includeChart === true ? ['--chart'] : []),
+        '--format', 'json',
+      ],
+      timeoutMs: 45000,
+      unsupportedError: 'This Density CLI does not support historical sensor health yet.',
+      timedOutError: 'Historical sensor-health request timed out.',
+      responseLabel: 'Historical sensor-health',
+      payloadKey: 'report',
       nextAction: {
-        id: 'ask_organization_sensor_health',
-        label: 'Ask for organization-wide sensor health, or wait for scoped sensor-health support.',
+        id: 'update_cli_for_sensor_health_history',
+        label: 'Update the Density CLI to access historical sensor health.',
+        command: 'density capabilities --format json',
       },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-
-  const question = String(args.question || '').trim();
-  if (!sensorHealthIntent(question)) return unsupportedSensorQuestionResponse(question, contract);
-  if (requestsHistoricalSensorSnapshot(question)) {
-    return {
-      ok: false,
-      unsupported: true,
-      currentOnly: true,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      message: 'Sensor health currently supports only the latest cloud snapshot; historical sensor-status questions are not available.',
-      nextAction: {
-        id: 'ask_current_sensor_health',
-        label: 'Ask for the current sensor-health snapshot instead.',
-      },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-  if (requestsUnapprovedSignalDiagnosis(question)) {
-    return {
-      ok: false,
-      unsupported: true,
-      currentOnly: true,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract: {
-        ...contract,
-        staleThreshold: 'not_defined',
-      },
-      message: 'No approved heartbeat-age threshold is available for classifying a sensor as healthy, stale, or offline.',
-      nextAction: {
-        id: 'use_raw_sensor_status',
-        label: 'Ask for the current raw cloud sensor-status counts instead.',
-      },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-  const cliQuestion = /\bsensors?\b/i.test(question) && /\b(?:online|offline|error|errors|unconfigured|health|healthy|unhealthy|heartbeat|heartbeats|reporting|stale|attention)\b/i.test(question)
-    ? question
-    : 'How many sensors are online, are any reporting errors or unconfigured, and where?';
-  const timeoutMs = args.timeoutMs === undefined ? 5000 : Number(args.timeoutMs);
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
-  const deadline = startedAt + timeoutMs;
-  const cli = await requireCli();
-  const capabilityTimeoutMs = Math.min(deadline - Date.now(), 1500);
-  if (capabilityTimeoutMs <= 0) {
-    return {
-      ok: false,
-      unsupported: false,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      error: 'Sensor health capability check is unavailable because the request deadline elapsed.',
-    };
-  }
-  const capabilities = await discoverCliCapabilities(cli, {
-    dataDir,
-    timeoutMs: capabilityTimeoutMs,
-  });
-  if (!capabilities.checked) {
-    return {
-      ok: false,
-      unsupported: false,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      error: 'Density sensor-health capability is temporarily unavailable.',
-    };
-  }
-  if (!capabilities.commands?.questionSensorHealth) {
-    return {
-      ok: false,
-      unsupported: true,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      capabilities,
-      message: 'This Density CLI does not support first-class sensor-health questions yet.',
-      nextAction: {
-        id: 'update_cli_for_sensor_health',
-        label: 'Update/build a Density CLI with questionSensorHealth capability.',
-      },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    return {
-      ok: false,
-      unsupported: false,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      error: 'Sensor health request timed out before the cloud question could run.',
-    };
-  }
-  const result = await runDensity(cli, ['question', cliQuestion, '--chart', '--format', 'ui'], {
-    dataDir,
-    allowFailure: true,
-    timeoutMs: remainingMs,
-  });
-  if (result.code !== 0 || result.timedOut) {
-    return {
-      ok: false,
-      unsupported: false,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      error: result.timedOut ? 'Sensor health request timed out.' : 'Density sensor health request failed.',
-    };
-  }
-
-  let response;
-  try {
-    const renderTimeoutMs = deadline - Date.now();
-    if (renderTimeoutMs <= 0) throw new Error('Sensor health request deadline elapsed before PNG rendering.');
-    const parsedResponse = await parseQuestionUiAnswer({
-      question: question || cliQuestion,
-      dataDir,
-      cli,
-      result,
-      tool: 'sensor_health_report',
-      renderTimeoutMs,
-      remember: false,
     });
-    if (Date.now() > deadline) throw new Error('Sensor health request deadline elapsed during PNG rendering.');
-    response = await validateAndAllowlistSensorResponse({
-      response: parsedResponse,
-      question: question || cliQuestion,
-      elapsedMs: Date.now() - startedAt,
-      targetMs: timeoutMs,
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      unsupported: false,
-      sourceLayer: SOURCE_LAYERS.cloudSensorHealth,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.cloudSensorHealth),
-      sourceLabel: 'Density Sensor Health',
-      contract,
-      error: error?.code === 'SCOPE_MISMATCH'
-        ? 'Density sensor health response scope did not match the requested scope.'
-        : 'Density sensor health response could not be validated.',
-    };
+    return args.includeChart === true
+      ? attachQueryChartPreview(response, args, {}, 'report')
+      : response;
   }
-  if (!response.png) {
-    return {
-      ...response,
-      ok: false,
-      partial: true,
-      unsupported: false,
-      contract,
-      error: 'PNG renderer is unavailable; the validated answer and SVG chart are still available.',
-      nextAction: {
-        id: 'install_png_renderer',
-        label: 'Install rsvg-convert to generate the required PNG chart.',
-      },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-  return {
-    ...response,
-    unsupported: false,
-    contract,
-    capabilities,
-    userVisiblePrimaryActions: 0,
-  };
+  const repeated = (value) => Array.isArray(value) ? value : value === undefined ? [] : [value];
+  return runCapabilityJsonCommand(args, {
+    capability: 'sensorHealthCurrent',
+    cliArgs: [
+      'sensor-health', 'current',
+      ...(typeof args.building === 'string' && args.building.trim() ? ['--building', args.building.trim()] : []),
+      ...(typeof args.floor === 'string' && args.floor.trim() ? ['--floor', args.floor.trim()] : []),
+      ...repeated(args.status).flatMap((value) => typeof value === 'string' && value.trim() ? ['--status', value.trim()] : []),
+      ...repeated(args.sensor).flatMap((value) => typeof value === 'string' && value.trim() ? ['--sensor', value.trim()] : []),
+      ...(args.includeSensors === true ? ['--include-sensors'] : []),
+      '--format', 'json',
+    ],
+    timeoutMs: 15000,
+    unsupportedError: 'This Density CLI does not support current sensor-health data yet.',
+    timedOutError: 'Current sensor-health request timed out.',
+    responseLabel: 'Current sensor-health',
+    payloadKey: 'report',
+    nextAction: {
+      id: 'update_cli_for_sensor_health',
+      label: 'Update the Density CLI to access current sensor health.',
+      command: 'density capabilities --format json',
+    },
+  });
+
 }
 
 function localHistoricalProvenance({ dataDir, tool }) {
@@ -4417,77 +1981,6 @@ function localHistoricalProvenance({ dataDir, tool }) {
     dataDir,
     freshness: 'local_parquet_checked_by_setup_or_query',
     caveat: 'Local historical data answers customer-owned utilization questions; benchmark context and live availability require separate Density sources.',
-  };
-}
-
-export async function starterQuestions(args = {}) {
-  const cli = await requireCli();
-  const dataDir = resolveDataDir(args.dataDir);
-  const capabilities = await discoverCliCapabilities(cli, { dataDir });
-  const questions = {
-    known: [
-      'what are the busiest rooms?',
-      'what are the least used rooms?',
-      'what time are rooms busiest?',
-    ],
-    generated: [
-      'which room capacities are used most?',
-      'which room capacities are used most on weekends?',
-      'show me a pie chart of space type breakdown',
-      'what kinds of spaces are represented?',
-    ],
-  };
-
-  if (!capabilities.commands?.questionStarter) {
-    return {
-      ok: false,
-      unsupported: true,
-      dataDir,
-      cli: safeCliInfo(cli),
-      capabilities,
-      questions,
-      message: 'This Density CLI does not support fast starter-question runs yet.',
-      nextAction: {
-        id: 'update_cli_for_starter_questions',
-        label: 'Update/build a Density CLI that supports density question --starter.',
-        command: 'density capabilities --format json',
-      },
-      userVisiblePrimaryActions: 1,
-    };
-  }
-
-  const command = ['question', '--starter', '--format', 'json'];
-  if (args.chart !== false) command.push('--chart');
-  if (args.cached === true) command.push('--cached');
-  const answer = await runDensity(cli, command, { dataDir, allowFailure: true });
-  if (answer.code !== 0) {
-    return {
-      ok: false,
-      dataDir,
-      cli: safeCliInfo(cli),
-      capabilities,
-      questions,
-      error: oneLine(answer.stderr || answer.stdout),
-    };
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(answer.stdout);
-  } catch (error) {
-    throw new Error(`Density starter-question response was not JSON: ${error.message}`);
-  }
-
-  return {
-    ok: true,
-    ready: Boolean(parsed.readiness?.ready),
-    ...starterUsefulness(parsed.readiness),
-    readiness: parsed.readiness,
-    dataDir,
-    cli: safeCliInfo(cli),
-    capabilities,
-    questions,
-    result: parsed,
   };
 }
 

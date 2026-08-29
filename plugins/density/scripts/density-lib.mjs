@@ -168,7 +168,7 @@ const localFilePath = (value) => String(value ?? '').startsWith('file://')
   : value;
 
 const commandForCliBin = (bin) => /\.(?:cjs|js|mjs)$/i.test(bin)
-  ? { command: process.execPath, args: [bin] }
+  ? { command: process.env.DENSITY_CLI_NODE || process.execPath, args: [bin] }
   : { command: bin, args: [] };
 
 const normalizeManagedCliManifest = (manifest, source) => {
@@ -327,6 +327,7 @@ export const runDensity = async (cli, args, options = {}) => {
   const env = {
     ...process.env,
     ...(options.dataDir ? { DENSITY_CLI_DATA_DIR: options.dataDir } : {}),
+    ...(options.env ?? {}),
   };
   return run(cli.command, [...cli.args, ...args], {
     env,
@@ -988,17 +989,39 @@ export const checkPluginUpdate = async () => {
       return { checked: false, available: false, current, reason: 'Latest manifest did not include a version.' };
     }
     const available = compareVersions(current, latest) < 0;
+    const pluginHost = process.env.DENSITY_PLUGIN_HOST;
+    const update = pluginHost === 'claude'
+      ? {
+          command: process.env.DENSITY_PLUGIN_UPDATE_COMMAND
+            ?? 'claude plugin marketplace update density-local && claude plugin update density@density-local --scope user',
+          userPrompt: 'update density',
+          displayPrompt: 'update density',
+          pluginSelector: 'density@density-local',
+          prompt: 'A newer version of the Density plugin is available. Say `update density` and I can install it. Restart Claude after the update.',
+        }
+      : pluginHost === 'claude-desktop'
+        ? {
+            command: 'Install the latest Density extension in Claude Desktop.',
+            userPrompt: 'update density',
+            displayPrompt: 'update density',
+            pluginSelector: 'density',
+            prompt: 'A newer Density extension is available. Install the latest .mcpb package, then restart Claude Desktop.',
+          }
+        : {
+          command: 'codex plugin marketplace upgrade densityai && codex plugin remove density@densityai && codex plugin add density@densityai',
+          userPrompt: 'update @density',
+          displayPrompt: 'update [@density](plugin://density@densityai)',
+          pluginSelector: 'density@densityai',
+          pluginUri: 'plugin://density@densityai',
+          prompt: 'A newer version of the Density plugin is available. Say `update @density` and I can install it.',
+        };
     return {
       checked: true,
       available,
       current,
       latest,
-      command: 'codex plugin marketplace upgrade densityai && codex plugin remove density@densityai && codex plugin add density@densityai',
-      userPrompt: 'update @density',
-      displayPrompt: 'update [@density](plugin://density@densityai)',
-      pluginSelector: 'density@densityai',
-      pluginUri: 'plugin://density@densityai',
-      prompt: available ? 'A newer version of the Density plugin is available. Say `update @density` and I can install it.' : undefined,
+      ...update,
+      prompt: available ? update.prompt : undefined,
     };
   } catch (error) {
     return { checked: false, available: false, current, reason: `Could not check for updates: ${error.message}` };

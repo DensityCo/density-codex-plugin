@@ -49,14 +49,31 @@ test('exports a self-contained Claude skill bundle without Codex-only agent meta
   try {
     const result = await exportDensitySkills({ host: 'claude', outputRoot, pluginRoot });
 
-    assert.equal(result.skillCount, 8);
+    assert.equal(result.skillCount, 7);
     assert.match(await readFile(path.join(outputRoot, 'skills', 'density', 'SKILL.md'), 'utf8'), /# Density/);
     assert.match(
       await readFile(path.join(outputRoot, 'skills', 'benchmarking', 'references', 'darshan-benchmark-methodology.md'), 'utf8'),
       /Darshan Benchmark Methodology/,
     );
     assert.equal(await exists(path.join(outputRoot, 'skills', 'density', 'agents', 'openai.yaml')), false);
-    assert.equal(await exists(path.join(outputRoot, 'assets', 'design.md')), true);
+    assert.equal(
+      await readFile(path.join(outputRoot, 'assets', 'design.md'), 'utf8'),
+      await readFile(path.join(pluginRoot, 'guidance', 'design.md'), 'utf8'),
+    );
+    assert.equal(
+      await readFile(path.join(outputRoot, 'guidance', 'density-system-prompt.md'), 'utf8'),
+      await readFile(path.join(pluginRoot, 'guidance', 'density-system-prompt.md'), 'utf8'),
+    );
+    assert.match(
+      await readFile(path.join(outputRoot, 'skills', 'benchmarking', 'SKILL.md'), 'utf8'),
+      /\.\.\/\.\.\/assets\/design\.md/,
+    );
+    const claudeManifest = JSON.parse(await readFile(path.join(outputRoot, '.claude-plugin', 'plugin.json'), 'utf8'));
+    const codexManifest = JSON.parse(await readFile(path.join(outputRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
+    assert.equal(claudeManifest.name, 'density');
+    assert.equal(claudeManifest.version, codexManifest.version);
+    assert.equal(Object.hasOwn(claudeManifest, 'managedCli'), false);
+    assert.equal(Object.hasOwn(claudeManifest, 'interface'), false);
   } finally {
     await rm(outputRoot, { recursive: true, force: true });
   }
@@ -67,19 +84,32 @@ test('exports an executable Claude MCP runtime closure', async () => {
   const relocatedRoot = `${outputRoot}-relocated`;
   let child;
   try {
-    const result = await exportDensitySkills({ host: 'claude', outputRoot, pluginRoot });
+    const result = await exportDensitySkills({
+      host: 'claude',
+      outputRoot,
+      pluginRoot,
+      claudeEnv: {
+        DENSITY_CLI_BIN: '/tmp/density-cli',
+        DENSITY_CLI_DATA_DIR: '/tmp/density-data',
+      },
+    });
     const mcpConfig = JSON.parse(await readFile(path.join(outputRoot, '.mcp.json'), 'utf8'));
     const server = mcpConfig.mcpServers.density;
-    assert.equal(result.runtimeFileCount, 11);
+    assert.equal(result.runtimeFileCount, 13);
+    assert.equal(await exists(path.join(outputRoot, 'mcp-server', 'agent-response-envelope.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-background-deep-sync.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-demo-customer.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-setup.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-onboard-customer.mjs')), true);
-    assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-ask-chart.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'assets', 'density-icon.png')), true);
 
     assert.equal(server.args[0], '${CLAUDE_PLUGIN_ROOT}/mcp-server/server.mjs');
     assert.equal(Object.hasOwn(server, 'cwd'), false);
+    assert.deepEqual(server.env, {
+      DENSITY_PLUGIN_HOST: 'claude',
+      DENSITY_CLI_BIN: '/tmp/density-cli',
+      DENSITY_CLI_DATA_DIR: '/tmp/density-data',
+    });
     await rename(outputRoot, relocatedRoot);
     const hostArgs = server.args.map((arg) => arg.replaceAll('${CLAUDE_PLUGIN_ROOT}', relocatedRoot));
     child = spawn(server.command, hostArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -90,6 +120,7 @@ test('exports an executable Claude MCP runtime closure', async () => {
       clientInfo: { name: 'density-portable-export-test', version: '0.0.0' },
     });
     assert.equal(initialized.serverInfo.name, 'density');
+    assert.equal(initialized.instructions, undefined);
 
     const listed = await callMcp(child, 2, 'tools/list');
     assert.equal(listed.tools.some((tool) => tool.name === 'storage_report'), true);

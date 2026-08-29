@@ -13,7 +13,7 @@ Use this file as the single visual contract for Density plugin artifacts. If a u
 
 ## Principles
 
-- The default presentation is the fixed slide. Keep the title, subtitle, chart, evidence rail, legend, and footer in their assigned regions across questions and sites.
+- The default presentation is the fixed slide. Keep the scope eyebrow, descriptive title, data subtitle, chart, optional evidence rail, legend, and footer in their assigned regions across questions and sites. The eyebrow is `LOCAL · ORG · SCOPE`; never repeat the user's question on the slide.
 - The Broadsheet/Tufte variant is a concise analytical brief with a high signal-to-ink ratio, direct claims, restrained rules, and no generic dashboard chrome.
 - Lead with the answer, then show the evidence.
 - Make every important number comparative. Show the measured value with the denominator or baseline that makes it interpretable, then add the nearest internal comparison and a named Density benchmark when available.
@@ -29,19 +29,23 @@ Use this file as the single visual contract for Density plugin artifacts. If a u
 - Text: dark neutral, high contrast.
 - Accent: Density rust `#8c2f1d` for the primary finding.
 - Secondary colors: restrained neutrals, muted teal, and muted blue for comparisons or availability states.
-- Typography: large serif titles for report pages; compact sans-serif labels and table text for dense analytical surfaces. Chart titles should read like a sentence-case claim, not a dashboard widget label.
+- Typography: large serif descriptive titles for report pages; compact sans-serif labels and table text for dense analytical surfaces. Put the measured claim in the answer text or rail, not the title.
 - Radius: 8px or less for cards, controls, and repeated items.
 - Avoid decorative gradients, floating blobs, heavy shadows, and marketing-style hero layouts.
 - Avoid chart-card styling when the artifact itself is the answer. The chart should feel like a page or brief, not a screenshot of a dashboard tile.
 
 ## Native Delivery
 
-- The canonical artifact is the validated `1920x1080` fixed-slide HTML and its evidence receipt.
-- An inline preview must be rendered from that exact HTML. It may not reconstruct the chart, copy, rail, legend, or footer independently.
-- Bind the preview to the canonical artifact with the slide path and presentation digest.
-- A generated file path is not user-visible delivery. Report `delivered: "slide"` only when the host receives a renderable slide image, embedded resource, or supported panel target.
-- Keep the native response compact. Put the title, subtitle, delivery state, canonical paths, digest, and attachment first; keep detailed evidence in the referenced companion files.
-- A short caption may accompany the slide, but it may not replace the slide with a ranked list or a second visualization.
+- The canonical artifact is the validated `1920x1080` fixed-slide HTML.
+- The inline preview comes from that exact HTML.
+- Do not reconstruct the chart, copy, rail, legend, or footer independently.
+- A generated file path is not delivery.
+- Report a delivered slide only when the host receives a renderable image, embedded resource, or supported panel target.
+- Keep the native response compact.
+- A short caption may accompany the slide.
+- A complete answer or inline chart is terminal.
+- Do not screenshot, re-render, or rebuild a delivered artifact.
+- If a preview fails, relay the text answer and the stated reason.
 
 ## Semantic Encoding Rules
 
@@ -64,12 +68,15 @@ Use this file as the single visual contract for Density plugin artifacts. If a u
 - Sort ranked charts by the metric being discussed.
 - Show units in labels or subtitles, such as hours per day, person-hours, percent of working hours, or spaces.
 - Analyze only available measured spaces for normal utilization charts. Planning, inactive, retired, decommissioned, and unavailable spaces are eligibility inputs, not commentary, unless the chart is explicitly about data health, setup, lifecycle coverage, or missing inventory.
-- Avoid naked stats in titles, labels, and callouts. Match the denominator to the question: for one room over time, use language like "busy for 12% of working hours"; for hour-of-day charts across rooms, use "at 2pm, 13% of available measured rooms were occupied" instead of room-hour language.
+- Avoid naked stats in titles, labels, and callouts.
+- Match the denominator to the question.
+- For one room over time, use `<value>% of working hours (<window>)`.
+- For hour-of-day charts, use `<value>% of available measured rooms were occupied at <hour>`.
 - Use the accent color only for the lead series or important highlight.
 - Keep comparison series muted.
 - Include the time window, business-hours assumption with definition, timezone basis, and data freshness when relevant.
-- Keep chart generation dependency-light but not layout-blind. If rendering by hand, reserve explicit title, subtitle, legend, plot, and footnote regions before drawing marks.
-- Prefer generated chart artifacts from the Density CLI or plugin chart contract over ad hoc one-off scripts. If a one-off fallback is unavoidable, it must still follow this design file and be visually inspected for collisions.
+- Use the Density MCP or plugin chart contract for generated chart artifacts.
+- Do not use an ad hoc fallback after delivery or a preview failure.
 
 ## Atlas Analytics Defaults
 
@@ -78,7 +85,8 @@ Use this file as the single visual contract for Density plugin artifacts. If a u
 - Default utilization charts to local Atlas operating hours, typically `8am-6pm`, unless the artifact says otherwise.
 - Use local timezone projections from Atlas-style views for hour, weekday, heatmap, and working-hours displays.
 - Never label a UTC-grouped chart as local business-hour analysis.
-- Prefer top/bottom 12 ranked bars for room, booth, and capacity findings.
+- Keep ranked bars readable. Use a disclosed subset or additional slides when one chart cannot show every returned row clearly.
+- State the displayed and total row counts. Offer the remaining rows or slides.
 - Use gray for no data, a separate neutral for zero observed use, and an explicit caveat for low uptime or unhealthy signals.
 - For saturation/runout visuals, write the threshold in the subtitle or legend.
 
@@ -114,7 +122,7 @@ Every analytical artifact should make these visible when they matter:
 
 ## Governed Themes
 
-- The Density CLI theme registry is an authorized render-time selector. Implementations may expose a `theme` option accepting the nine named registry themes (`product_clean`, `editorial`, `swiss`, `boardroom_dark`, `ft_editorial`, `monograph`, `blueprint`, `humanist`, `newsprint_mono`), the three accent presets (`density_blue`, `indigo`, `deep_teal`), or a customer `#RRGGBB` brand accent gated by the CLI's reserved-hue and contrast checks.
+- The Density MCP theme registry is an authorized render-time selector. Implementations may expose a `theme` option accepting the ten named registry themes (`product_clean`, `editorial`, `swiss`, `boardroom_dark`, `ft_editorial`, `monograph`, `blueprint`, `humanist`, `newsprint_mono`, `marketplace_warm`), the three accent presets (`density_blue`, `indigo`, `deep_teal`), or a customer `#RRGGBB` brand accent gated by the runtime's reserved-hue and contrast checks.
 - A named theme restyles surfaces, ink ramps, type families, and data accents only. Every theme inherits the immutable editorial constitution, the semantic encoding rules, the fixed slide zones, and the reserved trust encodings; no theme may reposition a zone or repurpose a reserved color.
 - When no theme is selected, non-interactive and headless rendering uses `product_clean` as the deterministic fallback.
 - See `references/slide-orchestration.md` under the density skill for the orchestration contract that governs theme and chart-family selection.

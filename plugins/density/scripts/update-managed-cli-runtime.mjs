@@ -9,11 +9,11 @@ const defaultReleaseRepo = 'DensityCo/density-codex-plugin';
 
 const usage = `Usage: node plugins/density/scripts/update-managed-cli-runtime.mjs --runtime-manifest <path-or-url> [options]
 
-Updates plugins/density/.codex-plugin/plugin.json to pin a published Density CLI runtime.
+Updates plugins/density/.codex-plugin/plugin.json to pin a published Density MCP runtime.
 When the runtime pin changes, also advances the plugin patch version so installed caches can detect it.
 
 Options:
-  --runtime-manifest <path-or-url>  Runtime manifest JSON produced by density-cli package:runtime:archive.
+  --runtime-manifest <path-or-url>  Runtime manifest JSON produced by density-mcp package:runtime:archive.
   --plugin-root <dir>               Density plugin root. Defaults to plugins/density.
   --release-repo <owner/repo>       Runtime release repo. Defaults to DensityCo/density-codex-plugin.
   --allow-prerelease                Allow SemVer prerelease runtime versions.
@@ -110,24 +110,25 @@ export const normalizeRuntimeManifest = (manifest, options = {}) => {
   }
 
   const platformKey = `${platform}-${arch}`;
-  const runtimeName = assetName.startsWith('density-mcp-') ? 'density-mcp' : 'density-cli';
-  const expectedAssetName = `${runtimeName}-v${cliVersion}-${platformKey}.tar.gz`;
-  if (assetName !== expectedAssetName) {
-    throw new Error(`Runtime manifest assetName '${assetName}' does not match expected asset '${expectedAssetName}'.`);
+  const artifactPrefix = ['density-cli', 'density-mcp'].find(
+    (prefix) => assetName === `${prefix}-v${cliVersion}-${platformKey}.tar.gz`,
+  );
+  if (!artifactPrefix) {
+    throw new Error(`Runtime manifest assetName '${assetName}' does not match a supported Density runtime asset.`);
   }
 
   return {
     assetName,
+    artifactPrefix,
     cliVersion,
     platformKey,
     prerelease: parsedVersion.prerelease.length > 0,
-    runtimeName,
     sha256,
   };
 };
 
 export const runtimeAssetUrl = (runtime, releaseRepo = defaultReleaseRepo) =>
-  `https://github.com/${releaseRepo}/releases/download/${runtime.runtimeName}-runtime-v${runtime.cliVersion}/${runtime.assetName}`;
+  `https://github.com/${releaseRepo}/releases/download/${runtime.artifactPrefix}-runtime-v${runtime.cliVersion}/${runtime.assetName}`;
 
 export const updateManagedCliRuntime = async (options) => {
   const manifest = await readManifest(options.runtimeManifest);
@@ -177,7 +178,7 @@ const main = async () => {
     return;
   }
   const result = await updateManagedCliRuntime(options);
-  console.log(`Updated ${path.relative(process.cwd(), result.manifestPath)} to Density CLI ${result.runtime.cliVersion}`);
+  console.log(`Updated ${path.relative(process.cwd(), result.manifestPath)} to Density MCP ${result.runtime.cliVersion}`);
   console.log(`${result.pluginVersionChanged ? 'Bumped' : 'Kept'} Density plugin version ${result.pluginVersion}`);
   console.log(`Pinned ${result.runtime.platformKey}: ${result.url}`);
   console.log(`sha256 ${result.runtime.sha256}`);

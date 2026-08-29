@@ -7,7 +7,7 @@ description: Use when the user wants real-time Density availability, live occupa
 
 Use this skill for live or real-time availability. Do not use historical utilization tables to answer live wayfinding questions.
 
-Always use `../../assets/design.md` for visual artifacts.
+Always use `../../guidance/design.md` for visual artifacts.
 
 ## Interaction Contract
 
