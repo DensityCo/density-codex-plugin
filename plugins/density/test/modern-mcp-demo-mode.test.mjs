@@ -17,7 +17,7 @@ const args = process.argv.slice(2);
 const state = JSON.parse(readFileSync(process.env.DEMO_STATE_FILE, 'utf8'));
 appendFileSync(process.env.DEMO_LOG_FILE, args.join(' ') + '\\n');
 if (args[0] === 'capabilities') {
-  console.log(JSON.stringify({ commands: { demoMode: true, getDbSchema: true, queryDb: true, renderChart: true } }));
+  console.log(JSON.stringify({ commands: { demoMode: true, getDbSchema: true, queryDb: true, renderChart: true, sensorHealthCurrent: true, sensorHealthHistory: true } }));
   process.exit(0);
 }
 if (args[0] === 'demo' && args[1] === 'status') {
@@ -67,6 +67,41 @@ if (args[0] === 'query-db') {
 }
 if (args[0] === 'render-chart') {
   console.log(JSON.stringify({ kind: 'density.render-chart.v1', organizationId: 'demo_org' }));
+  process.exit(0);
+}
+if (args[0] === 'sensor-health' && args[1] === 'current') {
+  if (state.malformedSensorHealth) {
+    console.log(JSON.stringify({ contract: 'density.sensor-health-report.v1', organization: { id: '${privateCanary}' }, complete: true }));
+    process.exit(0);
+  }
+  console.log(JSON.stringify({
+    contract: 'density.sensor-health-report.v1',
+    mode: 'current',
+    organization: { id: 'demo_org', name: 'Demo Organization' },
+    scope: { type: 'organization', ids: ['demo_org'], label: 'Demo Organization' },
+    fetchedAt: '2026-08-31T12:00:00.000Z',
+    totals: { cloud: 2, eligible: 2, excluded: 0 },
+    statusCounts: [{ state: 'online', rawStatuses: ['healthy'], count: 2 }],
+    locations: [{ buildingId: 'demo_building_001', buildingName: 'Building 1', floorId: 'demo_floor_001', floorName: 'Floor 1', sensorCount: 2, statusCounts: [{ state: 'online', count: 2 }] }],
+    exclusions: [],
+    ...(args.includes('--include-sensors') ? { sensors: [{ serialNumber: 'demo_sensor_001', sensorType: null, state: 'online', rawStatus: 'healthy', buildingId: 'demo_building_001', buildingName: 'Building 1', floorId: 'demo_floor_001', floorName: 'Floor 1', lastStatusChange: '2026-08-31T11:00:00.000Z' }] } : {}),
+    complete: true,
+    caveats: ['This report contains current cloud sensor health.'],
+    demo: { generation: String(state.generation) },
+    source: 'cloud',
+  }));
+  process.exit(0);
+}
+if (args[0] === 'sensor-health' && args[1] === 'history') {
+  console.log(JSON.stringify({
+    contract: 'density.sensor-health-history-report.v1', mode: 'history',
+    organization: { id: 'demo_org', name: 'Demo Organization' },
+    scope: { type: 'building', ids: ['demo_building_001'], label: 'Building 1', timeZone: 'America/Los_Angeles' },
+    window: { start: '2026-08-30T07:00:00.000Z', end: '2026-08-31T07:00:00.000Z' },
+    timezone: 'America/Los_Angeles', cohort: { definition: 'currently_assigned', eligible: 2, excluded: 0 },
+    daily: [{ day: '2026-08-30', averageOnlineSensors: 1.5, averageKnownSensors: 2, averageUnknownSensors: 0, uptimePercent: 75, eligibleSensors: 2 }],
+    complete: true, caveats: ['Cloud sensor health.'], demo: { generation: String(state.generation) }, source: 'cloud',
+  }));
   process.exit(0);
 }
 console.error('${privateCanary} /private/customer/unexpected ' + args.join(' '));
@@ -134,20 +169,20 @@ const initialize = async (child, protocolVersion = '2025-06-18') => callMcp(chil
   clientInfo: { name: 'modern-mcp-demo-test', version: '0.0.0' },
 });
 
-test('Demo mode exposes and executes only the historical query and chart tools', async (t) => {
+test('Demo mode exposes only query, chart, and Demo-safe sensor health tools', async (t) => {
   const context = await fixture(t);
   const child = context.startServer();
   t.after(() => child.kill('SIGTERM'));
   await initialize(child);
 
   const listed = await callMcp(child, 2, 'tools/list');
-  assert.deepEqual(listed.tools.map(({ name }) => name), ['query_db', 'render_chart']);
+  assert.deepEqual(listed.tools.map(({ name }) => name), ['query_db', 'render_chart', 'sensor_health_report']);
 
   const blocked = await callMcp(child, 3, 'tools/call', { name: 'status', arguments: {} });
   assert.equal(blocked.isError, true);
   assert.deepEqual(JSON.parse(blocked.content[0].text), blocked.structuredContent);
   assert.equal(blocked.structuredContent.kind, 'density.demo-error.v1');
-  assert.match(blocked.structuredContent.error, /only historical queries and chart rendering/i);
+  assert.match(blocked.structuredContent.error, /only historical queries, chart rendering, and Demo-safe sensor health/i);
 
   const alternateProfile = await callMcp(child, 4, 'tools/call', {
     name: 'query_db',
@@ -177,6 +212,46 @@ test('Demo mode exposes and executes only the historical query and chart tools',
   const commands = (await readFile(context.logFile, 'utf8')).trim().split('\n');
   assert.equal(commands.some((command) => command === 'status'), false);
   assert.equal(commands.filter((command) => command.startsWith('query-db ')).length, 2);
+});
+
+test('Demo sensor health preserves cloud measurements and masks every identity', async (t) => {
+  const context = await fixture(t);
+  const child = context.startServer();
+  t.after(() => child.kill('SIGTERM'));
+  await initialize(child);
+
+  const aggregate = await callMcp(child, 2, 'tools/call', { name: 'sensor_health_report', arguments: {} });
+  assert.equal(aggregate.structuredContent.report.totals.cloud, 2);
+  assert.equal(aggregate.structuredContent.report.source, 'cloud');
+  assert.equal(aggregate.structuredContent.report.sensors, undefined);
+
+  const sensors = await callMcp(child, 3, 'tools/call', { name: 'sensor_health_report', arguments: { includeSensors: true } });
+  assert.equal(sensors.structuredContent.report.sensors[0].serialNumber, 'demo_sensor_001');
+  assert.doesNotMatch(JSON.stringify(sensors), new RegExp(`${privateCanary}|private/customer|serial_number|org-2`));
+
+  const history = await callMcp(child, 4, 'tools/call', {
+    name: 'sensor_health_report',
+    arguments: { mode: 'history', building: 'Building 1', start: '2026-08-30T07:00:00Z', end: '2026-08-31T07:00:00Z' },
+  });
+  assert.equal(history.structuredContent.report.daily[0].uptimePercent, 75);
+  assert.equal(history.structuredContent.report.source, 'cloud');
+  assert.doesNotMatch(JSON.stringify(history), new RegExp(`${privateCanary}|private/customer|org-2`));
+});
+
+test('Demo sensor health fails closed for malformed output and generation changes', async (t) => {
+  const context = await fixture(t, { enabled: true, generation: 1, malformedSensorHealth: true });
+  const child = context.startServer();
+  t.after(() => child.kill('SIGTERM'));
+  await initialize(child);
+
+  const malformed = await callMcp(child, 2, 'tools/call', { name: 'sensor_health_report', arguments: {} });
+  assert.equal(malformed.isError, true);
+  assert.doesNotMatch(JSON.stringify(malformed), new RegExp(privateCanary));
+
+  await context.writeState({ enabled: true, generation: 2 });
+  const changed = await callMcp(child, 3, 'tools/call', { name: 'sensor_health_report', arguments: {} });
+  assert.equal(changed.isError, true);
+  assert.match(changed.structuredContent.error, /status is unavailable/i);
 });
 
 test('Demo schema stays cached and mode changes require a fresh task', async (t) => {

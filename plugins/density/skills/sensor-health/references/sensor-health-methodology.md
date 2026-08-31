@@ -1,6 +1,6 @@
 # Sensor Health Methodology
 
-Sensor health explains whether Density can trust the signal. It is a cloud operational source and does not by itself explain workplace demand.
+Sensor health explains whether the signal is reliable. It is a cloud operational source and does not by itself explain workplace demand.
 
 Do not infer sensor health from local DuckDB, Parquet, historical utilization, or missing local rows. Local data health can explain whether local analytics are ready; cloud sensor health explains whether the live sensing system is healthy.
 

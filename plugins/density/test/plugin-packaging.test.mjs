@@ -153,6 +153,14 @@ test('Density design contract makes the fixed slide default and preserves Broads
 test('Density system prompt preserves the Modern MCP UX contract', async () => {
   const prompt = await readFile(path.join(guidanceDir, 'density-system-prompt.md'), 'utf8');
 
+  assert.match(prompt, /Lead with what the workplace evidence shows/);
+  assert.match(prompt, /clear, concise, natural, and friendly sentences/);
+  assert.match(prompt, /Do not\s+narrate your internal work/);
+  assert.match(prompt, /After the finding, add only the context needed to interpret it/);
+  assert.match(prompt, /natural follow-up sentences, not a labeled section/);
+  assert.match(prompt, /scope, window,[\s\S]+measured population, denominator, missing data, freshness, or uncertainty/);
+  assert.match(prompt, /Do not add a heading or\s+label for this context/);
+  assert.doesNotMatch(prompt, /trust paragraph/i);
   assert.match(prompt, /Ask one concise question only when an unresolved choice could materially change/);
   assert.match(prompt, /Bare "utilization" is ambiguous/);
   assert.match(prompt, /Binary occupancy supports occupied state and occupied time, not a people count/);
@@ -172,6 +180,16 @@ test('Density system prompt preserves the Modern MCP UX contract', async () => {
   assert.match(prompt, /Presentation-only edits reuse evidence/);
   assert.match(prompt, /Do not add\s+silent caps, thresholds, or automatic rewrites/);
   assert.match(prompt, /required evidence is unavailable[\s\S]+state the\s+closest truthful result or next useful option/);
+});
+
+test('Density Codex skill carries the natural analyst voice', async () => {
+  const skill = await readFile(path.join(skillsDir, 'density', 'SKILL.md'), 'utf8');
+
+  assert.match(skill, /^## Analyst Voice$/m);
+  assert.match(skill, /Lead with what the workplace evidence shows/);
+  assert.match(skill, /natural follow-up sentences, not a labeled section/);
+  assert.match(skill, /Do not add a heading or\s+label for this context/);
+  assert.doesNotMatch(skill, /trust paragraph/i);
 });
 
 test('Density ships the slide orchestration contract with the density skill', async () => {

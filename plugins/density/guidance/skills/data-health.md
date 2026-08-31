@@ -14,7 +14,7 @@ Use `query_db` for historical utilization, `live_wayfinding_status` for current 
 
 ## Interaction Contract
 
-- Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to trust it.
+- Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to interpret it.
 - Keep CLI, MCP, shell, cache, and tool-routing mechanics out of user-facing prose unless the user asks, an action is blocked, or those mechanics change the next step.
 - Ask one crisp clarifying question when building, floor, space type, time window, or current-versus-historical scope is ambiguous.
 - Keep local historical data, live availability, benchmark context, and sensor health separate.
@@ -26,7 +26,7 @@ Keep user-visible progress updates at the workplace level:
 
 - Say what decision you are making for the user, not which skill, MCP tool, CLI command, cache path, SQL query, or local file is being used.
 - Do not mention parser misses, reserved SQL words, DuckDB internals, shell commands, skill loading, or tool routing unless the user explicitly asks for debugging.
-- If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed to trust the final answer.
+- If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed for the final answer.
 - When progress helps, state the scope, time window, or completeness choice that affects the answer.
 
 Prefer the plugin MCP tools when available:

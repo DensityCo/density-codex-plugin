@@ -112,6 +112,8 @@ test('Modern MCP default surface uses query_db, unique tool descriptions, and on
       assert.match(renderTool.description, /nearest truthful, relevant Brief chart/i);
       assert.match(renderTool.description, /separate Brief charts when units, populations, periods, timezones, denominators, or aggregations/i);
       assert.match(renderTool.description, /Reuse the evidence ID when it supports the related chart/i);
+      assert.match(renderTool.description, /Never requery to change display formatting/i);
+      assert.match(renderTool.inputSchema.properties.chart.properties.columns.items.properties.unit.description, /0–100 scale/i);
       assert.match(renderTool.description, /Never use the previous renderer or a chart fallback cascade/i);
       assert.match(renderTool.description, /stop and state the representation limit; do not retry another body/i);
       const analysisSchema = queryTool.inputSchema.properties.analysis;

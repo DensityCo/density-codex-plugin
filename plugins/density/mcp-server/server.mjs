@@ -32,6 +32,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { standardizeAgentResponse } from './agent-response-envelope.mjs';
+import { publicQueryResponse, queryResponseDiagnostics } from './query-response-envelope.mjs';
 
 const chartDeclarationInputSchema = {
   type: 'object',
@@ -54,7 +55,11 @@ const chartDeclarationInputSchema = {
             enum: ['time', 'entity', 'series', 'measure', 'bin', 'low', 'high'],
             description: 'Use measure only for quantitative evidence the user asked to chart. Omit rank, row number, ids, and coverage metadata.',
           },
-          unit: { type: 'string', minLength: 1 },
+          unit: {
+            type: 'string',
+            minLength: 1,
+            description: 'For percent measures, the query must return values on a 0–100 scale. Do not pass 0–1 fractions as percent values.',
+          },
           label: { type: 'string', minLength: 1 },
           sparklineField: {
             type: 'string',
@@ -248,7 +253,7 @@ const tools = [
     required: ['sql'],
     additionalProperties: false,
   }, localReadOnlyTool),
-  tool('render_chart', 'Render existing query evidence without executing DuckDB again. Before this call, resolve any material ambiguity and choose one supported Brief body with model judgment. For a clear request whose exact visualization does not fit the Brief grammar, automatically use the nearest truthful, relevant Brief chart. Use separate Brief charts when units, populations, periods, timezones, denominators, or aggregations cannot share one faithful chart. Reuse the evidence ID when it supports the related chart; run a new query only when meaning or required evidence changes. Never use the previous renderer or a chart fallback cascade. If this call rejects the deliberate Brief declaration, stop and state the representation limit; do not retry another body. When the user does not request a count, use at most 15 displayed rows for a ranked bar chart. Keep the full result in the evidence; do not add a SQL limit. The chart states the shown and total row counts.', {
+  tool('render_chart', 'Render existing query evidence without executing DuckDB again. Before this call, resolve any material ambiguity and choose one supported Brief body with model judgment. For a clear request whose exact visualization does not fit the Brief grammar, automatically use the nearest truthful, relevant Brief chart. Use separate Brief charts when units, populations, periods, timezones, denominators, or aggregations cannot share one faithful chart. Reuse the evidence ID when it supports the related chart; run a new query only when meaning or required evidence changes. Never requery to change display formatting. For percent charts, make the query return 0–100 values before this call. Omit decimals for bars; semantic formatting handles their labels. Never use the previous renderer or a chart fallback cascade. If this call rejects the deliberate Brief declaration, stop and state the representation limit; do not retry another body. When the user does not request a count, use at most 15 displayed rows for a ranked bar chart. Keep the full result in the evidence; do not add a SQL limit. The chart states the shown and total row counts.', {
     type: 'object',
     properties: {
       evidenceId: { type: 'string', pattern: '^qe_[a-f0-9]{64}$' },
@@ -363,7 +368,7 @@ const BLOCKED_QUERY_RELATIONS = /\bdensity_(?:atlas_local|space)_metrics\b/i;
 const schemaReadInstruction = 'Before calling `query_db`, read the application-controlled resource `density://schema` directly once for the question. Do not list tools or resources first.';
 const systemPromptPath = new URL('../guidance/density-system-prompt.md', import.meta.url);
 const schemaTextByDataDir = new Map();
-const DEMO_ALLOWED_TOOLS = new Set(['query_db', 'render_chart']);
+const DEMO_ALLOWED_TOOLS = new Set(['query_db', 'render_chart', 'sensor_health_report']);
 const demoTools = tools.filter(({ name }) => DEMO_ALLOWED_TOOLS.has(name));
 const DEMO_PRIVATE_FIELDS = new Set([
   'cli',
@@ -385,10 +390,61 @@ const resources = [
   },
 ];
 
+const DEFAULT_REMOTE_MCP_URL = 'https://density-mcp-cloud-spike.preview.density.rodeo/api/mcp-full';
+const REMOTE_TOKEN_ENV = 'DENSITY_CLOUD_MCP_TOKEN';
+
 let inputBuffer = '';
 let toolQueue = Promise.resolve();
 let negotiatedProtocolVersion = '2025-06-18';
 let sessionDemoBinding;
+let sessionSourceBinding;
+
+async function configuredDataSource(dataDir) {
+  try {
+    const state = JSON.parse(await readFile(path.join(dataDir, 'state.json'), 'utf8'));
+    if (state.dataSource === undefined || state.dataSource === 'local') return 'local';
+    if (state.dataSource === 'remote') return 'remote';
+    throw new Error('The Density data source is invalid.');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 'local';
+    throw new Error('The Density data source is unavailable.');
+  }
+}
+
+async function sessionDataSource(dataDir) {
+  const source = await configuredDataSource(dataDir);
+  if (sessionSourceBinding === undefined) {
+    sessionSourceBinding = source;
+  } else if (sessionSourceBinding !== source) {
+    throw new Error('The Density data source changed. Start a fresh task.');
+  }
+  return source;
+}
+
+async function remoteMcpResponse(message) {
+  if (Object.hasOwn(message.params?.arguments ?? {}, 'dataDir')) {
+    throw new Error('Remote Density uses the server-selected data source.');
+  }
+  const token = process.env[REMOTE_TOKEN_ENV]?.trim();
+  if (!token) throw new Error(`Remote Density access requires ${REMOTE_TOKEN_ENV}.`);
+  const endpoint = process.env.DENSITY_REMOTE_MCP_URL?.trim() || DEFAULT_REMOTE_MCP_URL;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!response.ok) throw new Error(`Remote Density returned HTTP ${response.status}.`);
+  const value = await response.json();
+  if (!value || typeof value !== 'object' || value.jsonrpc !== '2.0') {
+    throw new Error('Remote Density returned an invalid MCP response.');
+  }
+  return value;
+}
 
 async function hasDemoModeState(dataDir) {
   try {
@@ -441,6 +497,10 @@ async function handleRawMessage(raw) {
   if (!Object.prototype.hasOwnProperty.call(message, 'id')) return;
 
   try {
+    if (await sessionDataSource(resolveDataDir()) === 'remote') {
+      sendRemoteResponse(message.id, await remoteMcpResponse(message));
+      return;
+    }
     if (message.method === 'initialize') {
       negotiatedProtocolVersion = message.params?.protocolVersion || '2025-06-18';
       sendResult(message.id, {
@@ -585,7 +645,7 @@ async function callTool(name, args) {
     return demoToolError('Demo mode status is unavailable.');
   }
   if (demo.enabled && !DEMO_ALLOWED_TOOLS.has(name)) {
-    return demoToolError('Demo mode allows only historical queries and chart rendering.');
+    return demoToolError('Demo mode allows only historical queries, chart rendering, and Demo-safe sensor health.');
   }
   if (demo.enabled && args.dataDir !== undefined) {
     return demoToolError('Demo mode uses the host-selected local profile.');
@@ -601,7 +661,8 @@ async function callTool(name, args) {
         return demoToolError('Demo mode could not complete this request.');
       }
       const publicText = JSON.stringify(result);
-      if (!publicText.includes('demo_org')) {
+      if (!publicText.includes('demo_org')
+        || (name === 'sensor_health_report' && !publicText.includes(`\"generation\":\"${demo.generation}\"`))) {
         return demoToolError('Demo mode could not complete this request.');
       }
     }
@@ -634,7 +695,7 @@ async function callToolUnchecked(name, args, demoEnabled) {
       const value = await queryDb(args);
       return demoEnabled && demoPayloadFailed(value)
         ? demoToolError('Demo mode could not complete this request.')
-        : queryDbTool(value, demoEnabled);
+        : queryDbTool(value, demoEnabled, true);
     }
     case 'render_chart': {
       const value = await renderChart(args);
@@ -656,8 +717,12 @@ async function callToolUnchecked(name, args, demoEnabled) {
       return jsonTool(await liveWayfindingStatus(args));
     case 'benchmark_compare':
       return jsonTool(await benchmarkCompare(args));
-    case 'sensor_health_report':
-      return queryDbTool(await sensorHealthReport(args));
+    case 'sensor_health_report': {
+      const value = await sensorHealthReport(args);
+      return demoEnabled && demoPayloadFailed(value)
+        ? demoToolError('Demo mode could not complete this request.')
+        : queryDbTool(value, demoEnabled);
+    }
     case 'storage_report':
       return jsonTool(await storageReport(resolveDataDir(args.dataDir)));
     default:
@@ -721,21 +786,22 @@ function sanitizeDemoValue(value) {
   }));
 }
 
-async function queryDbTool(value, demoEnabled = false) {
+async function queryDbTool(value, demoEnabled = false, usePublicEnvelope = false) {
   const publicValue = demoEnabled ? sanitizeDemoValue(value) : value;
-  if (typeof value?.png !== 'string' || !value.png) return structuredJsonTool(publicValue);
+  const modelValue = !demoEnabled && usePublicEnvelope ? publicQueryResponse(publicValue) : publicValue;
+  const responseMeta = !demoEnabled && usePublicEnvelope ? queryResponseDiagnostics(value) : undefined;
+  if (typeof value?.png !== 'string' || !value.png) return structuredJsonTool(modelValue, responseMeta);
   try {
-    const result = structuredJsonTool(publicValue);
+    const result = structuredJsonTool(modelValue, responseMeta);
     result.content.push({ type: 'image', data: (await readFile(value.png)).toString('base64'), mimeType: 'image/png' });
     return result;
   } catch {
-    const { png: _stalePng, ...withoutTopLevelPng } = publicValue;
-    const payloadKey = publicValue?.result?.chart ? 'result' : publicValue?.report?.chart ? 'report' : 'result';
-    const payload = publicValue?.[payloadKey] ?? {};
+    const payloadKey = modelValue?.result?.chart ? 'result' : modelValue?.report?.chart ? 'report' : 'result';
+    const payload = modelValue?.[payloadKey] ?? {};
     const artifacts = payload?.chart?.artifacts ?? {};
     const { png: _staleArtifactPng, ...withoutArtifactPng } = artifacts;
     return structuredJsonTool({
-      ...withoutTopLevelPng,
+      ...modelValue,
       [payloadKey]: {
         ...payload,
         chart: {
@@ -744,13 +810,15 @@ async function queryDbTool(value, demoEnabled = false) {
           png: { state: 'unavailable', reason: 'The rendered PNG file was unavailable when the MCP response was assembled.' },
         },
       },
-    });
+    }, responseMeta);
   }
 }
 
-function structuredJsonTool(value) {
+function structuredJsonTool(value, responseMeta) {
   const content = [{ type: 'text', text: JSON.stringify(value, null, 2) }];
-  return negotiatedProtocolVersion >= '2025-06-18' ? { structuredContent: value, content } : { content };
+  return negotiatedProtocolVersion >= '2025-06-18'
+    ? { ...(responseMeta ? { _meta: responseMeta } : {}), structuredContent: value, content }
+    : { content };
 }
 
 function toolError(message) {
@@ -772,4 +840,12 @@ function sendResult(id, result) {
 
 function sendError(id, code, message) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } })}\n`);
+}
+
+function sendRemoteResponse(id, response) {
+  process.stdout.write(`${JSON.stringify({
+    jsonrpc: '2.0',
+    id,
+    ...(response.error ? { error: response.error } : { result: response.result }),
+  })}\n`);
 }

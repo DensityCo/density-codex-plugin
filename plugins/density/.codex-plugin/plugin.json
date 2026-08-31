@@ -1,6 +1,6 @@
 {
   "name": "density",
-  "version": "0.2.37",
+  "version": "0.2.38",
   "description": "Local-first Density workplace analytics, building lifecycle readiness, floorplans, wayfinding, benchmarking, sensor health, and visual reports.",
   "author": {
     "name": "Density"
@@ -21,6 +21,7 @@
     "requiredCapabilities": {
       "commands": [
         "availableBuildings",
+        "dataSource",
         "demoMode",
         "getDbSchema",
         "queryDb",

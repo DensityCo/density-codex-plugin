@@ -22,6 +22,7 @@ const runtimeFiles = [
   'assets/density-icon.png',
   'guidance/density-system-prompt.md',
   'mcp-server/agent-response-envelope.mjs',
+  'mcp-server/query-response-envelope.mjs',
   'mcp-server/server.mjs',
   'scripts/density-background-deep-sync.mjs',
   'scripts/density-core.mjs',

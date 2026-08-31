@@ -9,7 +9,7 @@ Use this skill for Density installation, auth, setup checks, local data preparat
 
 ## Interaction Contract
 
-- Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to trust it.
+- Lead with the practical workplace answer, then the source, freshness, confidence, and caveat needed to interpret it.
 - Keep CLI, MCP, shell, cache, and tool-routing mechanics out of user-facing prose unless the user asks, an action is blocked, or those mechanics change the next step.
 - Ask one crisp clarifying question when building, floor, space type, time window, or current-versus-historical scope is ambiguous.
 - Keep local historical data, live availability, benchmark context, and sensor health separate.
@@ -21,7 +21,7 @@ Keep user-visible progress updates at the workplace level:
 
 - Say what decision you are making for the user, not which skill, MCP tool, CLI command, cache path, SQL query, or local file is being used.
 - Do not mention parser misses, reserved SQL words, DuckDB internals, shell commands, skill loading, or tool routing unless the user explicitly asks for debugging.
-- If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed to trust the final answer.
+- If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed for the final answer.
 - When progress helps, state the scope, time window, or completeness choice that affects the answer.
 
 Prefer the plugin MCP tools when available:
@@ -48,7 +48,7 @@ Fallback scripts live in the plugin root under `scripts/`.
 4. If auth is missing, use `auth_login` or tell the user the next step is browser auth.
 5. If Parquet inputs are missing, present the onboarding choices from setup/onboard_customer. Recommend fetching 30 days for all locations now and continuing the remaining supported history in the background.
 6. Confirm that `query_db` is advertised. Use it with the supplied schema resource for local historical analytics. If it is missing, update the CLI before answering historical questions from the database.
-7. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before trusting building-level analysis artifacts.
+7. Confirm lifecycle readiness is advertised. If setup reports that building lifecycle/go-live readiness is missing, update the CLI before using building-level analysis artifacts.
 8. Use `available_buildings` when the user asks which buildings are available, live, queryable, mapped, or eligible for wayfinding.
 9. Use `status` for a concise configuration, sync, storage, and readiness summary.
 10. Use `storage_report` for detailed local table sizes.
