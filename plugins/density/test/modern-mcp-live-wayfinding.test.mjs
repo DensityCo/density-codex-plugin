@@ -13,28 +13,27 @@ if (args[0] === 'capabilities') {
   console.log(JSON.stringify({ commands: { wayfindingLiveAvailability: true } }));
   process.exit(0);
 }
-if (args[0] === 'onboard' && args[1] === 'scope') {
-  if (args[2] === 'Ambiguous Floor') {
+if (args[0] === 'live') {
+  if (args.includes('Ambiguous Floor')) {
     console.log(JSON.stringify({
-      ok: false,
-      reason: 'ambiguous',
-      suggestions: [
-        { id: 'floor_3_roxanne', name: 'Floor 03: SEA37', type: 'floor' },
-        { id: 'floor_3_jfk27', name: 'Floor 03: JFK27', type: 'floor' },
+      kind: 'density.live-error.v1',
+      error: { code: 'live_feed_unavailable', message: 'The floor name is ambiguous: Floor 03: SEA37, Floor 03: JFK27' },
+      clarification: [
+        { id: 'floor_3_roxanne', name: 'Floor 03: SEA37', buildingId: 'spc_roxanne' },
+        { id: 'floor_3_jfk27', name: 'Floor 03: JFK27', buildingId: 'spc_jfk27' },
       ],
     }));
     process.exit(0);
   }
-  console.log(JSON.stringify({ ok: true, scope: { id: 'spc_roxanne', name: 'SEA37 - Roxanne', type: 'building' } }));
-  process.exit(0);
-}
-if (args[0] === 'live') {
   console.log(JSON.stringify({
     kind: 'density.live-answer.v1',
     availabilityMode: 'live',
+    elapsedMs: 412,
     checkedSpaceCount: 4,
+    checkedFloorCount: 1,
+    query: { floorId: args.includes('--floor-query') ? 'floor_3_roxanne' : undefined },
     counts: { available: 1, occupied: 1, unavailable: 1, unknown: 0, stale: 1 },
-    candidates: [{ name: 'Juniper', available: true, occupied: false, availabilityStatus: 'available' }],
+    candidates: [{ name: 'Juniper', floorName: 'Floor 03: SEA37', buildingName: 'SEA37 - Roxanne', available: true, occupied: false, availabilityStatus: 'available' }],
     unavailableMatches: [
       { name: 'Cedar', available: false, occupied: true, availabilityStatus: 'occupied' },
       { name: 'Birch', available: false, occupied: false, availabilityStatus: 'stale', observedAt: '2026-06-23T15:00:00.000Z', receivedAt: '2026-06-23T18:00:00.000Z', healthStatus: 'healthy' },
@@ -74,6 +73,9 @@ test('liveWayfindingStatus resolves a building name and calls density live', asy
   assert.equal(response.liveAvailable, true);
   assert.equal(response.walkableRecommendation, true);
   assert.equal(response.summary.spacesChecked, 4);
+  assert.equal(response.summary.floorsChecked, 1);
+  assert.equal(response.summary.elapsedMs, 412);
+  assert.equal(response.summary.spaces[0].floorName, 'Floor 03: SEA37');
   assert.deepEqual(response.summary.counts, { available: 1, occupied: 1, unavailable: 1, unknown: 0, stale: 1 });
   assert.deepEqual(response.summary.spaces.map(({ name, state }) => ({ name, state })), [
     { name: 'Juniper', state: 'available' },
@@ -82,13 +84,11 @@ test('liveWayfindingStatus resolves a building name and calls density live', asy
     { name: 'Maple', state: 'unavailable' },
   ]);
   const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
-  assert.deepEqual(invocations.find(([command]) => command === 'onboard'), [
-    'onboard', 'scope', 'Roxanne', '--scope-type', 'building', '--format', 'json',
-  ]);
   assert.deepEqual(invocations.find(([command]) => command === 'live'), [
     'live', 'which conference rooms are available right now?', '--format', 'json',
-    '--building', 'spc_roxanne', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
+    '--building-query', 'Roxanne', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
   ]);
+  assert.equal(invocations.length, 1);
   assert.equal(invocations.some(([command]) => command === 'available-buildings'), false);
 });
 
@@ -124,9 +124,45 @@ test('liveWayfindingStatus returns floor clarification without listing the portf
     'Floor 03: JFK27',
   ]);
   const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
-  assert.deepEqual(invocations.find(([command]) => command === 'onboard'), [
-    'onboard', 'scope', 'Ambiguous Floor', '--scope-type', 'floor', '--format', 'json',
+  assert.deepEqual(invocations.find(([command]) => command === 'live'), [
+    'live', 'how many phone booths are available?', '--format', 'json',
+    '--floor-query', 'Ambiguous Floor', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
   ]);
-  assert.equal(invocations.some(([command]) => command === 'live'), false);
+  assert.equal(invocations.length, 1);
   assert.equal(invocations.some(([command]) => command === 'available-buildings'), false);
+});
+
+test('liveWayfindingStatus resolves a floor within a building in one CLI call', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'density-live-wayfinding-mcp-'));
+  const cli = path.join(dir, 'density-fake.mjs');
+  const calls = path.join(dir, 'calls.jsonl');
+  await writeFile(cli, fakeCli);
+  await chmod(cli, 0o755);
+  const priorBin = process.env.DENSITY_CLI_BIN;
+  const priorCalls = process.env.DENSITY_TEST_CALLS;
+  process.env.DENSITY_CLI_BIN = cli;
+  process.env.DENSITY_TEST_CALLS = calls;
+  t.after(async () => {
+    if (priorBin === undefined) delete process.env.DENSITY_CLI_BIN;
+    else process.env.DENSITY_CLI_BIN = priorBin;
+    if (priorCalls === undefined) delete process.env.DENSITY_TEST_CALLS;
+    else process.env.DENSITY_TEST_CALLS = priorCalls;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const response = await liveWayfindingStatus({
+    query: 'open phone booths',
+    building: 'Roxanne',
+    floor: '3rd floor',
+    dataDir: path.join(dir, 'data'),
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.summary.floorsChecked, 1);
+  const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
+  assert.deepEqual(invocations.find(([command]) => command === 'live'), [
+    'live', 'open phone booths', '--format', 'json', '--building-query', 'Roxanne',
+    '--floor-query', '3rd floor', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
+  ]);
+  assert.equal(invocations.length, 1);
 });
