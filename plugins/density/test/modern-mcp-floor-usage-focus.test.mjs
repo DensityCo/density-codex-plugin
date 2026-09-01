@@ -18,8 +18,17 @@ if (args[0] === 'viz') {
   process.exit(0);
 }
 if (args[0] === 'live') {
+  if (process.env.DENSITY_TEST_LEGACY_LIVE === '1') {
+    console.log(JSON.stringify({
+      availabilityMode: 'live',
+      candidates: [{ spaceId: 'legacy_room_1', name: 'Legacy Room 1', available: true }],
+      unavailableMatches: [{ spaceId: 'legacy_room_2', name: 'Legacy Room 2', available: false }],
+    }));
+    process.exit(0);
+  }
   console.log(JSON.stringify({
     availabilityMode: 'live',
+    matchedSpaceIds: ['room_1', 'room_2', 'room_3'],
     candidates: [{ spaceId: 'room_1', name: 'Room 1', available: true }],
   }));
   process.exit(0);
@@ -104,5 +113,46 @@ test('liveWayfindingStatus requests and returns a separate focused live floorpla
   assert.equal(response.floorplanHtml, '/tmp/wayfinding-floorplan.html');
   const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
   const wayfinding = invocations.find(([command, subcommand]) => command === 'wayfinding' && subcommand === 'floorplan');
-  assert.deepEqual(wayfinding, ['wayfinding', 'floorplan', '--floor', 'floor_1', '--format', 'json']);
+  assert.deepEqual(wayfinding, [
+    'wayfinding', 'floorplan', '--floor', 'floor_1', '--format', 'json',
+    '--focus-space', 'room_1',
+    '--focus-space', 'room_2',
+    '--focus-space', 'room_3',
+  ]);
+});
+
+test('liveWayfindingStatus falls back to candidate IDs from an older CLI', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'density-live-floor-legacy-focus-'));
+  const cli = path.join(dir, 'density-fake.mjs');
+  const calls = path.join(dir, 'calls.jsonl');
+  await writeFile(cli, fakeCli);
+  await chmod(cli, 0o755);
+  const previousBin = process.env.DENSITY_CLI_BIN;
+  const previousCalls = process.env.DENSITY_TEST_CALLS;
+  const previousLegacy = process.env.DENSITY_TEST_LEGACY_LIVE;
+  process.env.DENSITY_CLI_BIN = cli;
+  process.env.DENSITY_TEST_CALLS = calls;
+  process.env.DENSITY_TEST_LEGACY_LIVE = '1';
+  t.after(async () => {
+    if (previousBin === undefined) delete process.env.DENSITY_CLI_BIN;
+    else process.env.DENSITY_CLI_BIN = previousBin;
+    if (previousCalls === undefined) delete process.env.DENSITY_TEST_CALLS;
+    else process.env.DENSITY_TEST_CALLS = previousCalls;
+    if (previousLegacy === undefined) delete process.env.DENSITY_TEST_LEGACY_LIVE;
+    else process.env.DENSITY_TEST_LEGACY_LIVE = previousLegacy;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await liveWayfindingStatus({
+    query: 'room for two',
+    floorId: 'floor_1',
+    includeFloorplan: true,
+  });
+  const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
+  const wayfinding = invocations.find(([command, subcommand]) => command === 'wayfinding' && subcommand === 'floorplan');
+  assert.deepEqual(wayfinding, [
+    'wayfinding', 'floorplan', '--floor', 'floor_1', '--format', 'json',
+    '--focus-space', 'legacy_room_1',
+    '--focus-space', 'legacy_room_2',
+  ]);
 });
