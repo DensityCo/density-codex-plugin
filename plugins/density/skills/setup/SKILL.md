@@ -32,6 +32,7 @@ Prefer the plugin MCP tools when available:
 - `auth_login`
 - `onboard_customer`
 - `onboarding_status`
+- `prepare_floorplans`
 - `historical_export`
 - `create_demo_customer`
 - `storage_report`
@@ -53,6 +54,7 @@ Fallback scripts live in the plugin root under `scripts/`.
 9. Use `status` for a concise configuration, sync, storage, and readiness summary.
 10. Use `storage_report` for detailed local table sizes.
 11. Use `onboarding_status` to check a background deeper-history job and tell the user when the full supported local history is ready. Use `historical_export` when the user explicitly asks for a separate broader customer-owned local history export.
+12. Use `prepare_floorplans` only when the user asks to prepare an exact building or floor for a map.
 
 Normal setup should not run `npm install` or build the CLI from source. Use `DENSITY_CLI_REPO` plus `DENSITY_CLI_BUILD_FROM_SOURCE=1` only for explicit development work.
 
@@ -92,6 +94,8 @@ Setup should also prepare live wayfinding without pulling historical utilization
 - building/floor hierarchy
 - floorplans and geometry
 - identifiers needed by the real-time availability hook
+
+Use `prepare_floorplans` as an explicit, scoped map preparation action. Do not require it for text live availability.
 
 Do not ask users to set up API tokens for wayfinding. Live wayfinding should use the stored browser-auth Atlas session and the user's Density permissions.
 Do not call latest synced data "live" unless the command used a true live availability hook.

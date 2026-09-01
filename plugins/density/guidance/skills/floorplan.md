@@ -39,6 +39,10 @@ Keep user-visible progress updates at the workplace level:
 ## Data Routing
 
 - Historical utilization floorplan artifacts should use `floor_usage_report` when MCP tools are available, or `density viz --html --report floor-usage --format json` as the fallback.
+- When analysis identifies spaces, pass their exact floor as `floorId` and their exact IDs as `focusSpaceIds`.
+- Focused spaces locate historical evidence. Do not describe them as currently available.
+- For a chart-side location, query exact `floor_id` and `space_id` aliases. Declare them through `chart.spatial` when rendering the same evidence.
+- For a current availability map, call `live_wayfinding_status` with one exact floor and `includeFloorplan: true`.
 - Historical utilization overlays should use `query_db` with `density://schema`.
 - Real-time availability overlays should use the `wayfinding` skill.
 - Sensor coverage or offline/stale overlays should use the `sensor-health` skill.

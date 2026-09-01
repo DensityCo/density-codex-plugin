@@ -58,9 +58,12 @@ Save only an intentional, durable term, alias, schedule, goal, or definition.
 
 ## Use exact metric meanings
 
-Bare "utilization" is ambiguous when the definition changes the result. Offer
-utilization by capacity and utilization by time used first. Present inventory
-and frequency forms separately. State the selected definition in the answer.
+Bare "utilization" is ambiguous when the definition changes the result. Ask one
+focused clarification before querying. Offer average share of working time and
+spaces used for a daily duration threshold as short metric choices. State the
+proposed working-hours schedule in the same question. Keep an explicit user
+metric or schedule without asking again. State the selected definition in the
+answer.
 
 - Occupied means a valid observation detected at least one person.
 - Unoccupied means a valid observation detected no person.
