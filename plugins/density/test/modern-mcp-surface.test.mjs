@@ -139,7 +139,7 @@ test('Modern MCP default surface uses query_db, unique tool descriptions, and on
         additionalProperties: false,
       });
       assert.equal(analysisSchema.additionalProperties, false);
-      for (const operationalTool of ['setup', 'status', 'data_health_report', 'live_wayfinding_status', 'benchmark_compare', 'sensor_health_report', 'storage_report']) {
+      for (const operationalTool of ['setup', 'prepare_floorplans', 'status', 'data_health_report', 'live_wayfinding_status', 'benchmark_compare', 'sensor_health_report', 'storage_report']) {
         assert.equal(toolNames.includes(operationalTool), true, `${operationalTool} should remain model-visible`);
       }
       const sensorHealthTool = listed.tools.find(({ name }) => name === 'sensor_health_report');
@@ -148,6 +148,13 @@ test('Modern MCP default surface uses query_db, unique tool descriptions, and on
       assert.equal(sensorHealthTool.inputSchema.properties.includeChart.default, false);
       assert.deepEqual(sensorHealthTool.inputSchema.properties.status.items, { type: 'string' });
       assert.equal(sensorHealthTool.inputSchema.properties.includeSensors.default, false);
+      const floorUsageTool = listed.tools.find(({ name }) => name === 'floor_usage_report');
+      assert.ok(floorUsageTool, 'floor_usage_report should remain model-visible');
+      assert.equal(floorUsageTool.inputSchema.properties.floorId.type, 'string');
+      assert.deepEqual(floorUsageTool.inputSchema.properties.focusSpaceIds.items, { type: 'string', minLength: 1 });
+      assert.equal(floorUsageTool.inputSchema.properties.focusSpaceIds.maxItems, 20);
+      assert.equal(floorUsageTool.inputSchema.properties.focusSpaceIds.uniqueItems, true);
+      assert.match(floorUsageTool.inputSchema.properties.focusSpaceIds.description, /do not create a live availability claim/i);
       assert.deepEqual(listed.tools.find(({ name }) => name === 'local_data_profile').annotations, queryTool.annotations);
       assert.deepEqual(listed.tools.find(({ name }) => name === 'live_wayfinding_status').annotations, {
         readOnlyHint: true,
@@ -159,6 +166,11 @@ test('Modern MCP default surface uses query_db, unique tool descriptions, and on
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
+      });
+      assert.deepEqual(listed.tools.find(({ name }) => name === 'prepare_floorplans').annotations, {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
       });
 
       const resourceList = await callMcp(child, 3, 'resources/list');

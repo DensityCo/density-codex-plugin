@@ -25,6 +25,7 @@ export const densityDesktopToolNames = [
   'auth_login',
   'onboard_customer',
   'onboarding_status',
+  'prepare_floorplans',
   'status',
   'historical_export',
   'create_demo_customer',

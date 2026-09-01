@@ -30,6 +30,7 @@ const EXPECTED_MCP_TOOLS = [
   'auth_login',
   'onboard_customer',
   'onboarding_status',
+  'prepare_floorplans',
   'status',
   'historical_export',
   'create_demo_customer',
@@ -314,7 +315,8 @@ test('Density guidance uses the Modern MCP query route', async () => {
   assert.match(systemPrompt, /one decimal for average occupancy and average time-used labels[\s\S]+whole\s+discrete people, whole rooms, and whole hours[\s\S]+missing values as[\s\S]+missing[\s\S]+Never display them as zero/, 'system prompt should preserve average precision and physical count rules');
   assert.match(density, /Return raw numeric values from SQL[\s\S]+without rounding them[\s\S]+renderer applies display precision[\s\S]+one decimal for average occupancy and average time-used labels[\s\S]+whole\s+discrete people and whole hours/, 'parent skill should preserve raw averages until display');
   assert.match(server, /resolve any material ambiguity[\s\S]+nearest truthful, relevant Brief chart[\s\S]+separate Brief charts[\s\S]+Never use the previous renderer or a chart fallback cascade[\s\S]+do not retry another body/, 'render_chart should expose the centralized adjacent-chart contract');
-  assert.match(density, /room question says use, usage, busiest, or utilization[\s\S]+average time-used percentage[\s\S]+not total\s+used hours/, 'parent skill should resolve unqualified room use to utilization percentage');
+  assert.match(density, /a room question says use, usage, or utilization without specifying[\s\S]+Ask one focused clarification[\s\S]+before querying[\s\S]+metric and working-hours basis/, 'parent skill should clarify unqualified room use before querying');
+  assert.match(systemPrompt, /Bare "utilization" is ambiguous[\s\S]+Ask one[\s\S]+focused clarification before querying[\s\S]+daily duration threshold[\s\S]+working-hours schedule in the same question/, 'system prompt should clarify the metric and working-hours basis before querying');
   assert.match(density, /complete local calendar days[\s\S]+latest complete\s+local[\s\S]+convert its boundaries to UTC[\s\S]+filter `bucket_start` before aggregation/, 'parent skill should filter large metric histories before local-time calculation');
   assert.match(density, /canonical `local_date`, `weekday`, and `hour` fields only after the\s+`bucket_start` filter/, 'parent skill should use canonical local fields after the UTC filter');
   assert.doesNotMatch(density, /round them to whole-number percentages in\s+SQL/, 'parent skill should not discard percentage precision in SQL');

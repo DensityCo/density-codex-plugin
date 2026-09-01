@@ -224,12 +224,21 @@ const safeWayfindingName = (space) =>
   space?.name ?? space?.displayName ?? space?.label ?? space?.spaceName ?? space?.roomName;
 
 const spaceAvailabilityState = (space) => {
-  if (typeof space?.available === 'boolean') return space.available ? 'available' : 'unavailable';
+  if (typeof space?.availabilityStatus === 'string') return space.availabilityStatus;
+  if (space?.available === true) return 'available';
+  if (space?.occupied === true) return 'occupied';
+  if (space?.available === false) return 'unavailable';
   return space?.availability ?? space?.status ?? space?.state ?? 'unknown';
 };
 
 const wayfindingSpaces = (parsed) => {
   if (Array.isArray(parsed?.spaces)) return parsed.spaces;
+  if (Array.isArray(parsed?.candidates) || Array.isArray(parsed?.unavailableMatches)) {
+    return [
+      ...(Array.isArray(parsed?.candidates) ? parsed.candidates : []),
+      ...(Array.isArray(parsed?.unavailableMatches) ? parsed.unavailableMatches : []),
+    ];
+  }
   const result = parsed?.result;
   return [
     ...(Array.isArray(result?.candidates) ? result.candidates : []),
@@ -239,24 +248,35 @@ const wayfindingSpaces = (parsed) => {
 
 const compactWayfindingSummary = (parsed) => {
   const spaces = wayfindingSpaces(parsed);
-  const counts = spaces.reduce((acc, space) => {
+  const derivedCounts = spaces.reduce((acc, space) => {
     const state = String(spaceAvailabilityState(space)).toLowerCase();
     if (state === 'available' || state === 'free' || state === 'vacant') acc.available += 1;
     else if (state === 'occupied') acc.occupied += 1;
     else if (state === 'unavailable') acc.unavailable += 1;
+    else if (state === 'stale') acc.stale += 1;
     else acc.unknown += 1;
     return acc;
-  }, { available: 0, occupied: 0, unavailable: 0, unknown: 0 });
+  }, { available: 0, occupied: 0, unavailable: 0, unknown: 0, stale: 0 });
+  const counts = parsed?.counts && typeof parsed.counts === 'object'
+    ? parsed.counts
+    : derivedCounts;
   const namedSpaces = spaces
     .map((space) => {
       const name = safeWayfindingName(space);
-      return name ? { name, state: spaceAvailabilityState(space) } : undefined;
+      return name ? {
+        name,
+        state: spaceAvailabilityState(space),
+        occupied: typeof space?.occupied === 'boolean' ? space.occupied : undefined,
+        observedAt: space?.observedAt,
+        receivedAt: space?.receivedAt,
+        healthStatus: space?.healthStatus,
+      } : undefined;
     })
     .filter(Boolean)
     .slice(0, 5);
   return {
     availabilityMode: parsed?.availabilityMode,
-    spacesChecked: spaces.length,
+    spacesChecked: Number.isFinite(parsed?.checkedSpaceCount) ? parsed.checkedSpaceCount : spaces.length,
     counts,
     spaces: namedSpaces.length ? namedSpaces : undefined,
   };
@@ -749,6 +769,70 @@ export async function availableBuildings(args = {}) {
     cli: safeCliInfo(cli),
     capabilities,
   };
+}
+
+export async function prepareFloorplans(args = {}) {
+  const dataDir = resolveDataDir(args.dataDir);
+  const buildingId = oneLine(args.buildingId);
+  const floorId = oneLine(args.floorId);
+  if (Boolean(buildingId) === Boolean(floorId)) {
+    return {
+      ok: false,
+      dataDir,
+      error: 'Floorplan preparation needs exactly one buildingId or floorId.',
+    };
+  }
+
+  const cli = await requireCli();
+  const timeoutSeconds = Number.isFinite(Number(args.timeoutSeconds)) ? Number(args.timeoutSeconds) : 110;
+  const timeoutMs = Math.max(1, Math.min(600, timeoutSeconds)) * 1000;
+  const steps = [];
+  const runStep = async (name, commandArgs) => {
+    const startedAt = Date.now();
+    const result = await runDensity(cli, commandArgs, { dataDir, allowFailure: true, timeoutMs });
+    const step = {
+      name,
+      command: ['density', ...commandArgs].join(' '),
+      ok: result.code === 0 && !result.timedOut,
+      timedOut: result.timedOut,
+      seconds: Number(((Date.now() - startedAt) / 1000).toFixed(2)),
+      stdout: oneLine(result.stdout),
+      stderr: oneLine(result.stderr),
+    };
+    steps.push(step);
+    if (!step.ok) {
+      throw Object.assign(new Error(`${name} failed: ${step.timedOut ? 'timed out' : step.stderr || step.stdout}`), { steps });
+    }
+  };
+
+  try {
+    const scopeArgs = buildingId ? ['--building', buildingId] : ['--floor', floorId];
+    await runStep('sync floorplans', ['sync', '--stream', 'floorplans', ...scopeArgs]);
+    const readiness = await availableBuildings({ dataDir, timeoutMs });
+    return {
+      ok: readiness.ok,
+      kind: 'density.floorplan-preparation',
+      sourceLayer: SOURCE_LAYERS.localCustomerData,
+      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
+      dataDir,
+      scope: buildingId ? { type: 'building', id: buildingId } : { type: 'floor', id: floorId },
+      steps,
+      mapReadiness: readiness,
+      textLiveChanged: false,
+      historicalDataChanged: false,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'density.floorplan-preparation',
+      dataDir,
+      scope: buildingId ? { type: 'building', id: buildingId } : { type: 'floor', id: floorId },
+      steps: error.steps ?? steps,
+      error: oneLine(error.message),
+      textLiveChanged: false,
+      historicalDataChanged: false,
+    };
+  }
 }
 
 async function runCapabilityJsonCommand(args, options) {
@@ -1426,10 +1510,28 @@ export async function status(args = {}) {
 }
 
 export async function floorUsageReport(args = {}) {
+  const focusSpaceIds = args.focusSpaceIds === undefined ? [] : args.focusSpaceIds;
+  if (!Array.isArray(focusSpaceIds)) {
+    throw new Error('focusSpaceIds must be an array.');
+  }
+  if (focusSpaceIds.length > 20) {
+    throw new Error('focusSpaceIds must contain at most 20 space IDs.');
+  }
+  const normalizedFocusSpaceIds = focusSpaceIds.map((value) => String(value).trim());
+  if (new Set(normalizedFocusSpaceIds).size !== normalizedFocusSpaceIds.length) {
+    throw new Error('focusSpaceIds must not contain duplicate space IDs.');
+  }
+  for (const spaceId of normalizedFocusSpaceIds) {
+    if (!spaceId) throw new Error('focusSpaceIds must contain non-empty space IDs.');
+  }
   const cli = await requireCli();
   const dataDir = resolveDataDir(args.dataDir);
   const command = ['viz', '--html', '--report', 'floor-usage', '--format', 'json'];
   if (args.outFile) command.push('--out', String(args.outFile));
+  if (args.floorId) command.push('--floor', String(args.floorId));
+  for (const spaceId of normalizedFocusSpaceIds) {
+    command.push('--focus-space', spaceId);
+  }
   const timeoutMs = args.timeoutMs === undefined ? 30000 : Number(args.timeoutMs);
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('timeoutMs must be a positive number.');
@@ -1535,6 +1637,21 @@ export async function dataHealthReport(args = {}) {
   };
 }
 
+const liveWayfindingFailure = ({ query, dataDir, error, artifactRequired }) => ({
+  ok: false,
+  sourceLayer: SOURCE_LAYERS.liveFeed,
+  sourceBadge: sourceBadgeFor(SOURCE_LAYERS.liveFeed),
+  liveAvailable: false,
+  walkableRecommendation: false,
+  query,
+  dataDir,
+  error,
+  fallbackAvailable: true,
+  fallback: 'Use historical utilization only as context; it is not a walkable recommendation.',
+  artifactRequired: artifactRequired ? 'floorplan' : undefined,
+  userVisiblePrimaryActions: 1,
+});
+
 export async function liveWayfindingStatus(args = {}) {
   const query = String(args.query || '').trim();
   if (!query) throw new Error('query is required.');
@@ -1548,10 +1665,50 @@ export async function liveWayfindingStatus(args = {}) {
   if (!Number.isFinite(maxAgeSeconds) || maxAgeSeconds <= 0) {
     throw new Error('maxAgeSeconds must be a positive number.');
   }
-  const command = ['wayfinding', 'local', query, '--format', 'json'];
-  if (args.floorId) command.push('--floor', String(args.floorId));
+  const building = String(args.building || '').trim();
+  const floor = String(args.floor || '').trim();
+  if (building && floor) throw new Error('Provide a building or a floor, not both.');
+  if (args.floorId && floor) throw new Error('Provide floor or floorId, not both.');
+  let floorId = args.floorId ? String(args.floorId) : undefined;
+  let buildingId;
+  const scopeQuery = floor || building;
+  if (scopeQuery) {
+    const scopeType = floor ? 'floor' : 'building';
+    const scopeResult = await runDensity(cli, [
+      'onboard', 'scope', scopeQuery,
+      '--scope-type', scopeType,
+      '--format', 'json',
+    ], { dataDir, allowFailure: true, timeoutMs });
+    if (scopeResult.code !== 0 || scopeResult.timedOut) {
+      return liveWayfindingFailure({
+        query,
+        dataDir,
+        error: scopeResult.timedOut ? 'Live scope resolution timed out.' : oneLine(scopeResult.stderr || scopeResult.stdout),
+        artifactRequired: args.floorplanArtifactRequired,
+      });
+    }
+    const scope = parseJsonOutput(scopeResult.stdout, 'Live scope resolution');
+    if (!scope.ok || !scope.scope?.id) {
+      return {
+        ...liveWayfindingFailure({
+          query,
+          dataDir,
+          error: scope.reason === 'ambiguous'
+            ? `The ${scopeType} name is ambiguous.`
+            : `The ${scopeType} was not found in the selected organization.`,
+          artifactRequired: args.floorplanArtifactRequired,
+        }),
+        clarification: scope.suggestions,
+      };
+    }
+    if (floor) floorId = scope.scope.id;
+    else buildingId = scope.scope.id;
+  }
+  const command = ['live', query, '--format', 'json'];
+  if (floorId) command.push('--floor', floorId);
+  if (buildingId) command.push('--building', buildingId);
   command.push('--live-timeout-ms', String(timeoutMs));
-  command.push('--freshness-minutes', String(maxAgeSeconds / 60));
+  command.push('--max-age-seconds', String(maxAgeSeconds));
   const result = await runDensity(cli, command, {
     dataDir,
     allowFailure: true,
@@ -1600,14 +1757,29 @@ export async function liveWayfindingStatus(args = {}) {
       userVisiblePrimaryActions: 1,
     };
   }
+  if (args.includeFloorplan === true && floorId) {
+    const floorplanResult = await runDensity(cli, [
+      'wayfinding', 'floorplan', '--floor', floorId, '--format', 'json',
+    ], { dataDir, allowFailure: true, timeoutMs });
+    if (floorplanResult.code === 0 && !floorplanResult.timedOut) {
+      const floorplan = parseJsonOutput(floorplanResult.stdout, 'Live floorplan');
+      parsed.floorplanArtifact = floorplan.artifact;
+      parsed.floorplanPanelTarget = floorplan.panelTarget;
+    } else {
+      parsed.floorplanError = floorplanResult.timedOut
+        ? 'Live floorplan timed out.'
+        : oneLine(floorplanResult.stderr || floorplanResult.stdout);
+    }
+  }
   const availabilityMode = parsed.availabilityMode;
   const liveAvailable = availabilityMode === 'live';
+  const walkableRecommendation = liveAvailable && Array.isArray(parsed.candidates) && parsed.candidates.length > 0;
   const response = {
     ok: true,
     sourceLayer: SOURCE_LAYERS.liveFeed,
     sourceBadge: sourceBadgeFor(SOURCE_LAYERS.liveFeed),
     liveAvailable,
-    walkableRecommendation: liveAvailable,
+    walkableRecommendation,
     query,
     dataDir,
     availabilityMode,
@@ -1621,6 +1793,10 @@ export async function liveWayfindingStatus(args = {}) {
     artifact: liveAvailable ? parsed.artifact : undefined,
     html: liveAvailable ? parsed.artifact?.html : undefined,
     panelTarget: liveAvailable ? parsed.panelTarget : undefined,
+    floorplanArtifact: liveAvailable ? parsed.floorplanArtifact : undefined,
+    floorplanHtml: liveAvailable ? parsed.floorplanArtifact?.html : undefined,
+    floorplanPanelTarget: liveAvailable ? parsed.floorplanPanelTarget : undefined,
+    floorplanError: liveAvailable ? parsed.floorplanError : undefined,
     fallback: liveAvailable ? undefined : 'This is not live availability; use it only as fallback context, not as a walkable recommendation.',
     explanation: liveAvailable
       ? undefined

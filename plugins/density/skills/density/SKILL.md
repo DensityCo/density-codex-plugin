@@ -72,9 +72,12 @@ Prefer one SELECT that returns the requested result and its necessary evidence.
 Do not use a planning query when the answer query can resolve the same facts.
 Do not convert missing evidence into zero.
 
-When a room question says use, usage, busiest, or utilization without specifying
-a unit, use average time-used percentage over the requested window, not total
-used hours.
+When a room question says use, usage, or utilization without specifying a unit,
+the metric and working-hours basis are ambiguous. Ask one focused clarification
+before querying that resolves the metric and working-hours basis. Offer average
+share of working time and spaces used for a daily duration threshold as short
+choices. State the proposed working-hours schedule in the same question. Keep
+an explicit user metric or schedule without asking again.
 
 Use complete local calendar days ending on each building's latest complete
 local day. Calculate each local window, convert its boundaries to UTC, and

@@ -20,6 +20,7 @@ import {
   localDataProfile,
   onboardCustomer,
   onboardingStatus,
+  prepareFloorplans,
   queryDb,
   renderChart,
   resolveDataDir,
@@ -102,6 +103,18 @@ const chartDeclarationInputSchema = {
         measuredField: { type: 'string', minLength: 1 },
       },
       minProperties: 1,
+      additionalProperties: false,
+    },
+    spatial: {
+      type: 'object',
+      description: 'Optional static historical location evidence in the chart rail. Every selected floor and space ID must come from the same query evidence. This never shows live state.',
+      properties: {
+        floorIdField: { type: 'string', minLength: 1, description: 'Exact returned alias containing one floor ID.' },
+        spaceIdField: { type: 'string', minLength: 1, description: 'Exact returned alias containing one to five space IDs.' },
+        labelField: { type: 'string', minLength: 1, description: 'Optional returned alias containing the human space name.' },
+        title: { type: 'string', minLength: 1, description: 'Optional short heading. Defaults to Historical location.' },
+      },
+      required: ['floorIdField', 'spaceIdField'],
       additionalProperties: false,
     },
     display: {
@@ -193,6 +206,16 @@ const tools = [
     },
     additionalProperties: false,
   }, localReadOnlyTool),
+  tool('prepare_floorplans', 'Explicitly cache floorplan geometry for one building or floor. This does not fetch historical utilization or change live text availability.', {
+    type: 'object',
+    properties: {
+      dataDir: { type: 'string' },
+      buildingId: { type: 'string', minLength: 1, description: 'Exact building id. Use either buildingId or floorId.' },
+      floorId: { type: 'string', minLength: 1, description: 'Exact floor id. Use either floorId or buildingId.' },
+      timeoutSeconds: { type: 'number', minimum: 1, maximum: 600, description: 'Per-command timeout. Defaults to 110 seconds.' },
+    },
+    additionalProperties: false,
+  }, remoteWriteTool),
   tool('status', 'Report local Density configuration, safe identity, scope, sync freshness, storage size, and readiness. Use when the user asks what is configured, downloaded, current, or ready. Do not call before every analysis.', {
     type: 'object',
     properties: {
@@ -275,10 +298,18 @@ const tools = [
     required: ['source'],
     additionalProperties: false,
   }, remoteWriteTool),
-  tool('floor_usage_report', 'Use for floorplan, map, spatial overlay, heatmap, or visual floor-usage artifact requests. Historical utilization only; live walkable availability belongs in live_wayfinding_status.', {
+  tool('floor_usage_report', 'Use for floorplan, map, spatial overlay, heatmap, or visual floor-usage artifact requests. Historical utilization only; live walkable availability belongs in live_wayfinding_status. Use floorId to show one floor. Use focusSpaceIds to locate result spaces without changing the historical measure.', {
     type: 'object',
     properties: {
       question: { type: 'string', description: 'Optional user prompt that requested the floorplan artifact.' },
+      floorId: { type: 'string', minLength: 1, description: 'Optional exact floor space ID. The report shows only this floor.' },
+      focusSpaceIds: {
+        type: 'array',
+        description: 'Optional exact space IDs to outline and label on the selected floor. These IDs locate evidence; they do not create a live availability claim.',
+        items: { type: 'string', minLength: 1 },
+        maxItems: 20,
+        uniqueItems: true,
+      },
       dataDir: { type: 'string' },
       outFile: { type: 'string', description: 'Optional destination HTML file. Defaults to the Density artifacts directory.' },
       timeoutMs: { type: 'number', minimum: 1, maximum: 120000 },
@@ -313,10 +344,13 @@ const tools = [
     type: 'object',
     properties: {
       query: { type: 'string' },
-      floorId: { type: 'string' },
+      building: { type: 'string', description: 'Building name or ID in the selected organization.' },
+      floor: { type: 'string', description: 'Floor name or ID in the selected organization.' },
+      floorId: { type: 'string', description: 'Exact floor ID. Use floor for a natural-language floor name.' },
       dataDir: { type: 'string' },
       timeoutMs: { type: 'number', minimum: 1, maximum: 30000 },
       maxAgeSeconds: { type: 'number', minimum: 1, maximum: 300 },
+      includeFloorplan: { type: 'boolean', description: 'When true, also return a separate interactive live floorplan focused on matching spaces. Requires one exact floor.' },
     },
     required: ['query'],
     additionalProperties: false,
@@ -685,6 +719,8 @@ async function callToolUnchecked(name, args, demoEnabled) {
       return structuredJsonTool(standardizeAgentResponse('onboard_customer', await onboardCustomer(args)));
     case 'onboarding_status':
       return structuredJsonTool(standardizeAgentResponse('onboarding_status', await onboardingStatus(args)));
+    case 'prepare_floorplans':
+      return jsonTool(await prepareFloorplans(args));
     case 'status':
       return structuredJsonTool(await status(args));
     case 'historical_export':
