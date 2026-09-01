@@ -130,6 +130,13 @@ interval. When no interval is given, choose one that fits the metric, window,
 and presentation, then disclose it. Sum durations, preserve peaks with a
 maximum, and use weighted means where required.
 
+When every compared population uses 15-minute data, preserve that resolution.
+For mixed-resolution comparisons, normalize to one row per space and local
+hour. Use the hourly row when present. Otherwise, aggregate complete 15-minute
+rows. Never use both resolutions for one space-hour. Keep incomplete
+space-hours missing and report their coverage. Calculate weighted means from
+their weights. Do not average percentages without their weights.
+
 Use canonical scope and local calendar fields when the schema provides them.
 Filter the UTC bucket window before grouping by local date, weekday, or hour.
 

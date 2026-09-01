@@ -89,6 +89,13 @@ Use the canonical `local_date`, `weekday`, and `hour` fields only after the
 `bucket_start` filter. Use `building_id`, `floor_id`, and `space_function`
 directly when those fields resolve the requested population.
 
+When every compared population uses 15-minute data, preserve that resolution.
+For mixed-resolution comparisons, normalize to one row per space and local
+hour. Use the hourly row when present. Otherwise, aggregate complete 15-minute
+rows. Never use both resolutions for one space-hour. Keep incomplete
+space-hours missing and report their coverage. Calculate weighted means from
+their weights. Do not average percentages without their weights.
+
 Use unrounded values for bin assignment, threshold tests, ordering, and
 comparisons. Return raw numeric values from SQL. Multiply fractional percentage
 values by 100 without rounding them. The renderer applies display precision.
