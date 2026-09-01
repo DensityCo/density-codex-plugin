@@ -10,19 +10,46 @@ import { appendFile } from 'node:fs/promises';
 const args = process.argv.slice(2);
 await appendFile(process.env.DENSITY_TEST_LOG, JSON.stringify(args) + '\\n');
 if (args[0] === 'capabilities') {
-  console.log(JSON.stringify({ commands: { availableBuildings: true } }));
+  console.log(JSON.stringify({ commands: { availableBuildings: true, onboardingScopeReadiness: true } }));
   process.exit(0);
 }
 if (args[0] === 'sync') {
   console.log('synced');
   process.exit(0);
 }
-if (args[0] === 'available-buildings') {
+if (args[0] === 'onboard' && args[1] === 'scope') {
+  const id = args[2];
+  const type = args[args.indexOf('--scope-type') + 1];
+  if (id === 'missing') {
+    console.log(JSON.stringify({ kind: 'density.onboarding.scope-resolution', ok: false, query: id, reason: 'not_found', suggestions: [], sourceViews: [] }));
+    process.exit(0);
+  }
+  const floors = type === 'building'
+    ? [{ id: 'f1', name: 'Floor 1', liveEligible: true }, { id: 'f2', name: 'Floor 2', liveEligible: false }]
+    : [{ id, name: 'Floor 1', liveEligible: true }];
   console.log(JSON.stringify({
-    kind: 'density.available-buildings',
+    kind: 'density.onboarding.scope-resolution',
+    ok: true,
+    query: id,
+    requestedType: type,
+    dataDir: process.env.DENSITY_CLI_DATA_DIR,
     organizationId: 'org_fixture',
     organizationName: 'Fixture',
-    buildings: [{ id: 'b1', name: 'B1', geometry: { hasGeometry: true }, liveWayfindingEligible: true, caveats: [] }],
+    scope: { id, name: type === 'building' ? 'B1' : 'Floor 1', type, status: 'live', matchedBy: 'id', descendantSpaceCount: 3, rootSpaceIds: [id], spaceIds: [id] },
+    readiness: {
+      organizationId: 'org_fixture',
+      scope: { id, name: type === 'building' ? 'B1' : 'Floor 1', type, status: 'live', matchedBy: 'id' },
+      goLive: { goLiveState: 'complete', totalFloorplans: 2, goLiveFloorplans: 2, liveFloorplans: 2, futureFloorplans: 0 },
+      metrics: { rows: 0, spaces: 0 },
+      geometry: { mappedSpaces: 12, floorplans: 2, hasGeometry: true },
+      chartQueryable: false,
+      metadataOnly: true,
+      liveWayfindingEligible: true,
+      caveats: [],
+      sourceViews: ['atlas_spaces_flat'],
+    },
+    floors,
+    sourceViews: ['spaces'],
   }));
   process.exit(0);
 }
@@ -53,17 +80,27 @@ const prepareWithFakeCli = async (t, scope) => {
   return { commands, response };
 };
 
-test('prepareFloorplans scopes map preparation without historical sync', async (t) => {
+test('prepareFloorplans returns scoped readiness and floors without a portfolio scan', async (t) => {
   const { commands, response } = await prepareWithFakeCli(t, { buildingId: 'b1' });
 
   assert.equal(response.ok, true);
   assert.deepEqual(response.scope, { type: 'building', id: 'b1' });
-  assert.equal(response.mapReadiness.summary.liveWayfindingEligible, 1);
+  assert.equal(response.mapReadiness.ok, true);
+  assert.equal(response.mapReadiness.liveWayfindingEligible, true);
+  assert.deepEqual(response.mapReadiness.scope, { id: 'b1', name: 'B1', type: 'building', status: 'live', matchedBy: 'id' });
+  assert.deepEqual(response.floors, [
+    { id: 'f1', name: 'Floor 1', liveEligible: true },
+    { id: 'f2', name: 'Floor 2', liveEligible: false },
+  ]);
   assert.equal(response.textLiveChanged, false);
   assert.equal(response.historicalDataChanged, false);
   assert.deepEqual(commands.filter(([command]) => command === 'sync'), [
     ['sync', '--stream', 'floorplans', '--building', 'b1'],
   ]);
+  assert.deepEqual(commands.filter(([command]) => command === 'onboard'), [
+    ['onboard', 'scope', 'b1', '--scope-type', 'building', '--include-readiness', '--format', 'json'],
+  ]);
+  assert.equal(commands.some(([command]) => command === 'available-buildings'), false);
   assert.equal(commands.some((args) =>
     args.includes('spaces')
     || args.includes('metrics')
@@ -76,9 +113,23 @@ test('prepareFloorplans fetches only one requested floor', async (t) => {
 
   assert.equal(response.ok, true);
   assert.deepEqual(response.scope, { type: 'floor', id: 'f1' });
+  assert.deepEqual(response.floors, [{ id: 'f1', name: 'Floor 1', liveEligible: true }]);
   assert.deepEqual(commands.filter(([command]) => command === 'sync'), [
     ['sync', '--stream', 'floorplans', '--floor', 'f1'],
   ]);
+  assert.deepEqual(commands.filter(([command]) => command === 'onboard'), [
+    ['onboard', 'scope', 'f1', '--scope-type', 'floor', '--include-readiness', '--format', 'json'],
+  ]);
+});
+
+test('prepareFloorplans reports an unresolved scope after the sync', async (t) => {
+  const { response } = await prepareWithFakeCli(t, { buildingId: 'missing' });
+
+  assert.equal(response.ok, false);
+  assert.equal(response.mapReadiness.ok, false);
+  assert.match(response.mapReadiness.error, /not found/);
+  assert.deepEqual(response.floors, []);
+  assert.equal(response.steps[0].ok, true);
 });
 
 test('prepareFloorplans requires one exact map scope', async () => {

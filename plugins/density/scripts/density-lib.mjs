@@ -142,15 +142,19 @@ export const run = async (command, args = [], options = {}) => {
   if (timer) clearTimeout(timer);
   if (forceKillTimer) clearTimeout(forceKillTimer);
   if (stopPollTimer) clearTimeout(stopPollTimer);
+  return finishRun(command, args, { code, stdout, stderr, timedOut }, options);
+};
+
+const finishRun = (command, args, raw, options) => {
   const result = {
-    code,
-    stdout: redactSecrets(stdout),
-    stderr: redactSecrets(stderr),
-    timedOut,
+    code: raw.code,
+    stdout: redactSecrets(raw.stdout),
+    stderr: redactSecrets(raw.stderr),
+    timedOut: raw.timedOut,
   };
-  if (code !== 0 && !options.allowFailure) {
-    const reason = timedOut ? `timed out after ${timeout}ms` : (result.stderr || result.stdout);
-    throw new Error(redactSecrets(`${command} ${args.join(' ')} failed (${code}): ${reason}`));
+  if (result.code !== 0 && !options.allowFailure) {
+    const reason = result.timedOut ? `timed out after ${Number(options.timeoutMs ?? 0)}ms` : (result.stderr || result.stdout);
+    throw new Error(redactSecrets(`${command} ${args.join(' ')} failed (${result.code}): ${reason}`));
   }
   return result;
 };
@@ -277,6 +281,41 @@ export const supportsAnalyticArtifact = (capabilities = {}, mode) => (
   && (mode === undefined || capabilities.analyticArtifact.modes.includes(mode))
 );
 
+const explicitCliOverride = () => Boolean(
+  process.env.DENSITY_CLI_COMMAND || process.env.DENSITY_CLI_BIN || process.env.DENSITY_CLI_REPO
+);
+
+// One automatic install attempt per process; the download is SHA-256 verified.
+let managedAutoInstall;
+const autoInstallManagedCli = (manifest) => {
+  managedAutoInstall ??= (async () => {
+    if (process.env.DENSITY_MANAGED_CLI_AUTOINSTALL === '0') {
+      return { ok: false, reason: 'automatic install is disabled by DENSITY_MANAGED_CLI_AUTOINSTALL=0' };
+    }
+    try {
+      await installManagedCliRuntime({ manifest });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: error.message };
+    }
+  })();
+  return managedAutoInstall;
+};
+
+const resolveFallbackCli = async () => {
+  for (const repo of knownCliRepos()) {
+    const bin = path.join(repo, 'bin', 'density.mjs');
+    if (await fileExists(bin)) {
+      return { command: process.execPath, args: [bin], source: repo, path: bin, repo };
+    }
+  }
+  const pathDensity = await which('density');
+  if (pathDensity) {
+    return { command: pathDensity, args: [], source: 'PATH', path: pathDensity, ambiguous: true };
+  }
+  return undefined;
+};
+
 export const resolveDensityCli = async () => {
   if (process.env.DENSITY_CLI_COMMAND) {
     return { command: process.env.DENSITY_CLI_COMMAND, args: [], source: 'DENSITY_CLI_COMMAND', path: process.env.DENSITY_CLI_COMMAND, explicit: true };
@@ -285,7 +324,15 @@ export const resolveDensityCli = async () => {
     return { ...commandForCliBin(process.env.DENSITY_CLI_BIN), source: 'DENSITY_CLI_BIN', path: process.env.DENSITY_CLI_BIN, explicit: true };
   }
   const managedManifest = await loadManagedCliManifest();
-  const managed = await managedCliRuntimeStatus(managedManifest);
+  let managed = await managedCliRuntimeStatus(managedManifest);
+  let managedMissing;
+  if (managedManifest && !managed.installed && managed.assetAvailable && !explicitCliOverride()) {
+    const install = await autoInstallManagedCli(managedManifest);
+    managed = await managedCliRuntimeStatus(managedManifest);
+    if (!managed.installed) {
+      managedMissing = { version: managedManifest.version, reason: install.reason ?? managed.reason };
+    }
+  }
   if (managed.installed) {
     return {
       command: managed.path,
@@ -298,17 +345,9 @@ export const resolveDensityCli = async () => {
       runtimeDir: managed.runtimeDir,
     };
   }
-  for (const repo of knownCliRepos()) {
-    const bin = path.join(repo, 'bin', 'density.mjs');
-    if (await fileExists(bin)) {
-      return { command: process.execPath, args: [bin], source: repo, path: bin, repo };
-    }
-  }
-  const pathDensity = await which('density');
-  if (pathDensity) {
-    return { command: pathDensity, args: [], source: 'PATH', path: pathDensity, ambiguous: true };
-  }
-  return undefined;
+  // A fallback CLI still resolves, but the marker tells callers the pinned runtime is absent.
+  const fallback = await resolveFallbackCli();
+  return fallback && managedMissing ? { ...fallback, managedMissing } : fallback;
 };
 
 export const ensureDensityCliBuilt = async (cli) => {
@@ -323,18 +362,293 @@ export const ensureDensityCliBuilt = async (cli) => {
   return { built: true, reason: 'built local repo cli' };
 };
 
+// ---------------------------------------------------------------------------
+// Warm CLI client. `density serve` keeps one CLI process and its DuckDB session
+// open. It reads `{ id, argv, timeoutMs? }` JSON lines on stdin and answers
+// `{ id, code, stdout, stderr, error?, timedOut? }` lines on stdout. Read-style
+// commands go through it. Every other command runs as a one-shot process.
+
+const WARM_CLI_COMMANDS = new Set([
+  'capabilities',
+  'status',
+  'get-db-schema',
+  'query-db',
+  'render-chart',
+  'live',
+  'wayfinding',
+  'available-buildings',
+  'onboard',
+  'sensor-health',
+  'viz',
+  'atlas',
+]);
+const WARM_CLI_READY_LINE = 'density serve ready';
+const WARM_CLI_STDERR_TAIL_LINES = 20;
+const warmCliClients = new Map();
+const warmCliCooldownUntil = new Map();
+let warmCliExitHooksInstalled = false;
+
+const positiveEnvNumber = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+const warmCliStartupTimeoutMs = () => positiveEnvNumber('DENSITY_MCP_WARM_CLI_STARTUP_MS', 15000);
+const warmCliIdleMs = () => positiveEnvNumber('DENSITY_MCP_WARM_CLI_IDLE_MS', 600000);
+const warmCliCooldownMs = () => positiveEnvNumber('DENSITY_MCP_WARM_CLI_COOLDOWN_MS', 60000);
+
+const warmCliCommand = (args) => (args[0] === 'demo' ? args[1] === 'status' : WARM_CLI_COMMANDS.has(args[0]));
+
+const warmCliClientKey = (cli, env, overrides) => createHash('sha256').update(JSON.stringify({
+  cli: cli.path ?? cli.command,
+  args: cli.args ?? [],
+  dataDir: env.DENSITY_CLI_DATA_DIR ?? null,
+  overrides: overrides ?? {},
+})).digest('hex');
+
+const warmCliFailure = (message) => ({ code: 1, stdout: '', stderr: `❌ ${message}`, timedOut: false });
+const WARM_CLI_FALLBACK = { fallback: true };
+
+const signalWarmCliChild = (child, signal) => {
+  try {
+    child.kill(signal);
+  } catch {
+    // The worker is already gone.
+  }
+};
+
+const killWarmCliChild = (child) => {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  signalWarmCliChild(child, 'SIGTERM');
+  const force = setTimeout(() => signalWarmCliChild(child, 'SIGKILL'), 250);
+  force.unref();
+  child.once('exit', () => clearTimeout(force));
+};
+
+const installWarmCliExitHooks = () => {
+  if (warmCliExitHooksInstalled) return;
+  warmCliExitHooksInstalled = true;
+  const stopAll = () => {
+    for (const client of warmCliClients.values()) signalWarmCliChild(client.child, 'SIGTERM');
+  };
+  process.once('exit', stopAll);
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.once(signal, () => {
+      stopAll();
+      process.kill(process.pid, signal);
+    });
+  }
+};
+
+// Keep the MCP event loop alive only while a request is in flight.
+const syncWarmCliRefs = (client) => {
+  const method = client.pending.size > 0 ? 'ref' : 'unref';
+  client.child[method]();
+  for (const stream of [client.child.stdin, client.child.stdout, client.child.stderr]) stream?.[method]?.();
+};
+
+/**
+ * Drop the client. The oldest pending request gets `outcome`; queued requests
+ * never started, so they fall back to one-shot. A graceful stop ends stdin
+ * and lets the worker exit on its own.
+ */
+const stopWarmCliClient = (client, outcome, options = {}) => {
+  if (client.stopped) return;
+  client.stopped = true;
+  if (warmCliClients.get(client.key) === client) warmCliClients.delete(client.key);
+  clearTimeout(client.idleTimer);
+  const [inFlight, ...queued] = [...client.pending.values()];
+  inFlight?.settle(outcome ?? WARM_CLI_FALLBACK);
+  for (const request of queued) request.settle(WARM_CLI_FALLBACK);
+  if (options.graceful) client.child.stdin.end();
+  else killWarmCliChild(client.child);
+};
+
+const scheduleWarmCliIdle = (client) => {
+  clearTimeout(client.idleTimer);
+  client.idleTimer = setTimeout(() => stopWarmCliClient(client, undefined, { graceful: true }), warmCliIdleMs());
+  client.idleTimer.unref();
+};
+
+const warmCliReplyResult = (reply) => ({
+  code: reply.timedOut ? null : Number.isInteger(reply.code) ? reply.code : 1,
+  stdout: String(reply.stdout ?? ''),
+  stderr: [reply.stderr, reply.error ? `❌ ${reply.error}` : ''].filter(Boolean).join('\n'),
+  timedOut: Boolean(reply.timedOut),
+});
+
+const receiveWarmCliReply = (client, line) => {
+  let reply;
+  try {
+    reply = JSON.parse(line);
+  } catch {
+    reply = undefined;
+  }
+  if (!reply || typeof reply !== 'object') {
+    // Anything but a protocol line on stdout means the worker is unreliable.
+    warmCliCooldownUntil.set(client.key, Date.now() + warmCliCooldownMs());
+    stopWarmCliClient(client, WARM_CLI_FALLBACK);
+    return;
+  }
+  const request = client.pending.get(reply.id);
+  if (!request) return;
+  request.settle(warmCliReplyResult(reply));
+  // The worker exits after a timed-out request. Do not wait for it.
+  if (reply.timedOut) stopWarmCliClient(client, WARM_CLI_FALLBACK);
+};
+
+const startWarmCliClient = (cli, env, key, freshnessKey) => {
+  const startupTimeoutMs = warmCliStartupTimeoutMs();
+  const child = spawn(cli.command, [...cli.args, 'serve'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const client = { key, freshnessKey, child, pending: new Map(), nextId: 1, stderrTail: [], stopped: false };
+  let markReady;
+  let markFailed;
+  client.ready = new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => markFailed(new Error(`The Density CLI serve worker did not report ready within ${startupTimeoutMs} ms.`)),
+      startupTimeoutMs,
+    );
+    markReady = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    markFailed = (error) => {
+      clearTimeout(timer);
+      reject(error);
+    };
+  });
+  client.ready.catch(() => {});
+  const onLines = (stream, onLine) => {
+    let buffer = '';
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        if (line.trim()) onLine(line);
+      }
+    });
+  };
+  onLines(child.stdout, (line) => receiveWarmCliReply(client, line));
+  onLines(child.stderr, (line) => {
+    if (line.trim() === WARM_CLI_READY_LINE) {
+      markReady();
+      return;
+    }
+    client.stderrTail.push(line);
+    if (client.stderrTail.length > WARM_CLI_STDERR_TAIL_LINES) client.stderrTail.shift();
+  });
+  child.stdin.on('error', () => {
+    // A write after the worker exited surfaces through the close handler.
+  });
+  child.on('error', (error) => {
+    markFailed(new Error(`The Density CLI serve worker failed to start: ${error.message}`));
+    stopWarmCliClient(client, warmCliFailure(`The Density CLI serve worker failed: ${error.message}`));
+  });
+  child.on('close', (code, signal) => {
+    const detail = client.stderrTail.length > 0 ? ` ${client.stderrTail.join(' ')}` : '';
+    markFailed(new Error(`The Density CLI serve worker exited before ready (code ${code}, signal ${signal}).${detail}`));
+    stopWarmCliClient(client, warmCliFailure(`The Density CLI serve worker exited (code ${code}, signal ${signal}).${detail}`));
+  });
+  installWarmCliExitHooks();
+  syncWarmCliRefs(client);
+  return client;
+};
+
+const sendWarmCliRequest = (client, args, options) => new Promise((resolve) => {
+  // The worker can exit between the ready line and this request.
+  if (client.stopped) {
+    resolve(WARM_CLI_FALLBACK);
+    return;
+  }
+  const id = client.nextId;
+  client.nextId += 1;
+  const timeoutMs = Number(options.timeoutMs ?? 0);
+  let timer;
+  const request = {
+    settle: (outcome) => {
+      clearTimeout(timer);
+      client.pending.delete(id);
+      syncWarmCliRefs(client);
+      resolve(outcome);
+    },
+  };
+  client.pending.set(id, request);
+  syncWarmCliRefs(client);
+  if (timeoutMs > 0) {
+    timer = setTimeout(() => {
+      request.settle({ code: null, stdout: '', stderr: '', timedOut: true });
+      stopWarmCliClient(client);
+    }, timeoutMs);
+  }
+  client.child.stdin.write(`${JSON.stringify({ id, argv: args, ...(timeoutMs > 0 ? { timeoutMs } : {}) })}\n`);
+});
+
+/** 'yes' | 'no' when the CLI answered a capabilities probe, 'unknown' when it did not. */
+const warmCliSupport = async (cli, args, dataDir) => {
+  const cached = capabilityCache.get(capabilityCacheKey(cli));
+  if (cached) return cached.capabilities.commands?.serve === true ? 'yes' : 'no';
+  // discoverCliCapabilities is probing this CLI right now.
+  if (args[0] === 'capabilities') return 'no';
+  const capabilities = await discoverCliCapabilities(cli, { dataDir });
+  if (!capabilities.checked) return 'unknown';
+  return capabilities.commands?.serve === true ? 'yes' : 'no';
+};
+
+/** Runs one command through the serve worker. Returns undefined when the caller must run it one-shot. */
+const runDensityWarm = async (cli, args, env, options) => {
+  const key = warmCliClientKey(cli, env, options.env);
+  const coolDown = () => warmCliCooldownUntil.set(key, Date.now() + warmCliCooldownMs());
+  if ((warmCliCooldownUntil.get(key) ?? 0) > Date.now()) return undefined;
+  const support = await warmCliSupport(cli, args, env.DENSITY_CLI_DATA_DIR ?? defaultDataDir());
+  if (support === 'unknown') coolDown();
+  if (support !== 'yes') return undefined;
+  const freshnessKey = await cliRuntimeFreshnessKey(cli);
+  let client = warmCliClients.get(key);
+  if (client && client.freshnessKey !== freshnessKey) {
+    // The CLI runtime changed on disk. Let the old worker drain and start a new one.
+    stopWarmCliClient(client, undefined, { graceful: true });
+    client = undefined;
+  }
+  if (!client) {
+    client = startWarmCliClient(cli, env, key, freshnessKey);
+    warmCliClients.set(key, client);
+  }
+  try {
+    await client.ready;
+  } catch (error) {
+    stopWarmCliClient(client, WARM_CLI_FALLBACK);
+    coolDown();
+    process.stderr.write(`Density CLI serve is unavailable, so commands run one-shot for ${Math.round(warmCliCooldownMs() / 1000)} s: ${error.message}\n`);
+    return undefined;
+  }
+  const outcome = await sendWarmCliRequest(client, args, options);
+  if (outcome.fallback) return undefined;
+  if (!client.stopped) scheduleWarmCliIdle(client);
+  return outcome;
+};
+
+/** Stops every serve worker. The next command starts a new one. */
+export const closeWarmCliClients = () => {
+  for (const client of [...warmCliClients.values()]) stopWarmCliClient(client, WARM_CLI_FALLBACK, { graceful: true });
+};
+
 export const runDensity = async (cli, args, options = {}) => {
   const env = {
     ...process.env,
     ...(options.dataDir ? { DENSITY_CLI_DATA_DIR: options.dataDir } : {}),
     ...(options.env ?? {}),
   };
-  return run(cli.command, [...cli.args, ...args], {
+  const oneShot = () => run(cli.command, [...cli.args, ...args], {
     env,
     cwd: options.cwd,
     allowFailure: options.allowFailure,
     timeoutMs: options.timeoutMs,
   });
+  if (env.DENSITY_MCP_WARM_CLI === '0' || options.cwd || !warmCliCommand(args)) return oneShot();
+  const warm = await runDensityWarm(cli, args, env, options);
+  return warm ? finishRun(cli.command, [...cli.args, ...args], warm, options) : oneShot();
 };
 
 export const safeCliInfo = (cli) => cli
@@ -349,6 +663,7 @@ export const safeCliInfo = (cli) => cli
       version: cli.version,
       platform: cli.platform,
       runtimeDir: cli.runtimeDir,
+      managedMissing: cli.managedMissing,
     }
   : undefined;
 
@@ -500,6 +815,11 @@ const parquetFreshnessKey = async (dataDir) => {
   }
 };
 
+const capabilityCacheKey = (cli) => JSON.stringify({
+  cli: cli.path ?? cli.command,
+  args: cli.args ?? [],
+});
+
 const cliRuntimeFreshnessKey = async (cli) => {
   const runtimePath = cli.path ?? cli.command;
   try {
@@ -516,10 +836,7 @@ export const discoverCliCapabilities = async (cli, options = {}) => {
   }
   const dataDir = options.dataDir ?? defaultDataDir();
   const runtimeFreshnessKey = await cliRuntimeFreshnessKey(cli);
-  const cacheKey = JSON.stringify({
-    cli: cli.path ?? cli.command,
-    args: cli.args ?? [],
-  });
+  const cacheKey = capabilityCacheKey(cli);
   const cached = capabilityCache.get(cacheKey);
   if (options.refresh !== true && cached?.freshnessKey === runtimeFreshnessKey) return cached.capabilities;
   const result = await runDensity(cli, ['capabilities', '--format', 'json'], {

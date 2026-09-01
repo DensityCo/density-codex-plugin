@@ -13,6 +13,7 @@ const desktopRuntimeFiles = [
   'mcp-server/artifact-content.mjs',
   'mcp-server/query-response-envelope.mjs',
   'mcp-server/server.mjs',
+  'mcp-server/state-file.mjs',
   'scripts/density-background-deep-sync.mjs',
   'scripts/density-core.mjs',
   'scripts/density-demo-customer.mjs',

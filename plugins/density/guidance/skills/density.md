@@ -42,7 +42,7 @@ files, skills, or cache operations.
 - Use `query_db` for historical workplace questions, rankings, and trends.
 - Use `render_chart` for a presentation-only change when existing evidence fully supports it.
 - Use `configure_brand` when the user supplies brand guidelines or a logo for future charts.
-- Use `live_wayfinding_status` and the `wayfinding` skill for current availability.
+- Use `live_wayfinding_status` and the `wayfinding` skill for current availability. Pass `building` and `floor` as names. When the response has `needsInput`, call again with a suggestion `id` as `floorId`.
 - Use `benchmark_compare` and the `benchmarking` skill for approved benchmark context.
 - Use `floor_usage_report` and the `floorplan` skill for spatial artifacts.
 - Use the `setup` skill for installation, authentication, onboarding, and recent-first 30-day preparation.

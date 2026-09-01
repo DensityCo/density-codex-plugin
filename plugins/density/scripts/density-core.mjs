@@ -53,6 +53,52 @@ const SOURCE_BADGES = {
 };
 
 const oneLine = (value) => String(value ?? '').trim();
+const DERIVED_DATASET_NAME = 'local_metrics';
+const MAINTAIN_LOCAL_METRICS_ARGS = ['maintain', 'local-metrics', '--format', 'json'];
+const derivedDatasetRepairsStarted = new Set();
+
+const unknownDerivedDataset = (reason) => ({ name: DERIVED_DATASET_NAME, state: 'unknown', reason });
+
+const derivedDatasetState = async ({ dataDir, timeoutMs = 10000 }) => {
+  const cli = await resolveDensityCli();
+  if (!cli) return unknownDerivedDataset('Density CLI not found.');
+  const capabilities = await discoverCliCapabilities(cli, { dataDir });
+  if (!capabilities.commands?.maintainLocalMetrics) {
+    return unknownDerivedDataset('This Density CLI does not report the derived dataset state.');
+  }
+  const result = await runDensity(cli, [...MAINTAIN_LOCAL_METRICS_ARGS, '--check'], { dataDir, allowFailure: true, timeoutMs });
+  if (result.code !== 0 || result.timedOut) {
+    return unknownDerivedDataset(result.timedOut ? 'The derived dataset check timed out.' : oneLine(result.stderr || result.stdout));
+  }
+  try {
+    return JSON.parse(result.stdout).after;
+  } catch (error) {
+    return unknownDerivedDataset(`The derived dataset check was not JSON: ${error.message}`);
+  }
+};
+
+// Starts one detached `density maintain local-metrics` per data directory and server process.
+const startDerivedDatasetRepair = ({ cli, capabilities, dataDir, derivedDataset }) => {
+  if (!isRecord(derivedDataset) || derivedDataset.state === 'current' || derivedDataset.state === 'unknown') return undefined;
+  if (process.env.DENSITY_DISABLE_BACKGROUND_REFRESH === '1') {
+    return { started: false, reason: 'DENSITY_DISABLE_BACKGROUND_REFRESH=1 disables the background repair.' };
+  }
+  if (!capabilities.commands?.maintainLocalMetrics) {
+    return { started: false, reason: 'This Density CLI does not support density maintain local-metrics.' };
+  }
+  if (derivedDatasetRepairsStarted.has(dataDir)) {
+    return { started: false, reason: 'A repair already started in this server process.' };
+  }
+  derivedDatasetRepairsStarted.add(dataDir);
+  const child = spawn(cli.command, [...cli.args, ...MAINTAIN_LOCAL_METRICS_ARGS], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, DENSITY_CLI_DATA_DIR: dataDir },
+  });
+  child.on('error', () => {});
+  child.unref();
+  return { started: true, command: ['density', ...MAINTAIN_LOCAL_METRICS_ARGS].join(' '), pid: child.pid };
+};
 const sourceBadgeFor = (sourceLayer) => SOURCE_BADGES[sourceLayer] ?? 'Mixed';
 const nowIso = () => new Date().toISOString();
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -274,8 +320,7 @@ const compactWayfindingSummary = (parsed) => {
         healthStatus: space?.healthStatus,
       } : undefined;
     })
-    .filter(Boolean)
-    .slice(0, 5);
+    .filter(Boolean);
   return {
     availabilityMode: parsed?.availabilityMode,
     elapsedMs: Number.isFinite(parsed?.elapsedMs) ? parsed.elapsedMs : undefined,
@@ -711,16 +756,21 @@ const summarizeAvailableBuildings = (buildings) => buildings.reduce((summary, bu
 
 export async function availableBuildings(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
+  const includeMetrics = args.includeMetrics === true;
+  const building = oneLine(args.building);
   const cli = await requireCli();
   const capabilities = await discoverCliCapabilities(cli, { dataDir });
-  if (!availableBuildingsSupported(capabilities)) {
+  const buildingFilterSupported = Boolean(capabilities.commands?.availableBuildingsScope);
+  if (!availableBuildingsSupported(capabilities) || (building && !buildingFilterSupported)) {
     return {
       ok: false,
       unsupported: true,
       dataDir,
       cli: safeCliInfo(cli),
       capabilities,
-      message: 'This Density CLI does not support lifecycle-aware building readiness yet.',
+      message: building && !buildingFilterSupported
+        ? 'This Density CLI does not support a building filter for available-buildings yet.'
+        : 'This Density CLI does not support lifecycle-aware building readiness yet.',
       nextAction: {
         id: 'update_cli_for_building_lifecycle',
         label: 'Update/build a Density CLI that supports density available-buildings.',
@@ -730,7 +780,12 @@ export async function availableBuildings(args = {}) {
     };
   }
 
-  const result = await runDensity(cli, ['available-buildings', '--include-metrics', '--format', 'json'], {
+  const result = await runDensity(cli, [
+    'available-buildings',
+    ...(building ? ['--building', building] : []),
+    ...(includeMetrics ? ['--include-metrics'] : []),
+    '--format', 'json',
+  ], {
     dataDir,
     allowFailure: true,
     timeoutMs: args.timeoutMs ?? 15000,
@@ -752,6 +807,7 @@ export async function availableBuildings(args = {}) {
     throw new Error(`Density available-buildings response was not JSON: ${error.message}`);
   }
   const buildings = Array.isArray(parsed.buildings) ? parsed.buildings : [];
+  const derivedDatasetRepair = startDerivedDatasetRepair({ cli, capabilities, dataDir, derivedDataset: parsed.derivedDataset });
   return {
     ok: true,
     sourceLayer: SOURCE_LAYERS.localCustomerData,
@@ -759,7 +815,9 @@ export async function availableBuildings(args = {}) {
     kind: parsed.kind,
     organizationId: parsed.organizationId,
     organizationName: parsed.organizationName,
+    ...(isRecord(parsed.scope) ? { scope: parsed.scope } : {}),
     buildingCount: Number(parsed.buildingCount ?? buildings.length),
+    metricCoverageIncluded: includeMetrics,
     buildings,
     summary: summarizeAvailableBuildings(buildings),
     contract: {
@@ -769,11 +827,42 @@ export async function availableBuildings(args = {}) {
       liveWayfindingRequires: ['live_status', 'past_go_live', 'mapped_geometry'],
       missingGoLiveHandling: 'caveat_not_live_claim',
     },
+    ...(isRecord(parsed.derivedDataset) ? { derivedDataset: parsed.derivedDataset } : {}),
+    ...(derivedDatasetRepair ? { derivedDatasetRepair } : {}),
     dataDir,
     cli: safeCliInfo(cli),
     capabilities,
   };
 }
+
+// Readiness for one building or floor through `density onboard scope --include-readiness`. No portfolio scan.
+const scopeReadiness = async ({ cli, dataDir, timeoutMs, scope }) => {
+  const capabilities = await discoverCliCapabilities(cli, { dataDir });
+  if (!capabilities.commands?.onboardingScopeReadiness) {
+    return { ok: false, unsupported: true, error: 'This Density CLI does not report scope readiness yet.', floors: [] };
+  }
+  const result = await runDensity(cli, [
+    'onboard', 'scope', scope.id, '--scope-type', scope.type, '--include-readiness', '--format', 'json',
+  ], { dataDir, allowFailure: true, timeoutMs });
+  if (result.code !== 0 || result.timedOut) {
+    return { ok: false, error: result.timedOut ? 'Scope readiness timed out.' : oneLine(result.stderr || result.stdout), floors: [] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch (error) {
+    return { ok: false, error: `Scope readiness response was not JSON: ${error.message}`, floors: [] };
+  }
+  if (parsed.ok !== true || !isRecord(parsed.readiness)) {
+    return {
+      ok: false,
+      error: parsed.reason === 'ambiguous' ? 'The scope name is ambiguous.' : 'The scope was not found in the selected organization.',
+      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+      floors: [],
+    };
+  }
+  return { ok: true, ...parsed.readiness, floors: Array.isArray(parsed.floors) ? parsed.floors : [] };
+};
 
 export async function prepareFloorplans(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
@@ -786,6 +875,7 @@ export async function prepareFloorplans(args = {}) {
       error: 'Floorplan preparation needs exactly one buildingId or floorId.',
     };
   }
+  const scope = buildingId ? { type: 'building', id: buildingId } : { type: 'floor', id: floorId };
 
   const cli = await requireCli();
   const timeoutSeconds = Number.isFinite(Number(args.timeoutSeconds)) ? Number(args.timeoutSeconds) : 110;
@@ -812,16 +902,17 @@ export async function prepareFloorplans(args = {}) {
   try {
     const scopeArgs = buildingId ? ['--building', buildingId] : ['--floor', floorId];
     await runStep('sync floorplans', ['sync', '--stream', 'floorplans', ...scopeArgs]);
-    const readiness = await availableBuildings({ dataDir, timeoutMs });
+    const { floors, ...mapReadiness } = await scopeReadiness({ cli, dataDir, timeoutMs, scope });
     return {
-      ok: readiness.ok,
+      ok: mapReadiness.ok,
       kind: 'density.floorplan-preparation',
       sourceLayer: SOURCE_LAYERS.localCustomerData,
       sourceBadge: sourceBadgeFor(SOURCE_LAYERS.localCustomerData),
       dataDir,
-      scope: buildingId ? { type: 'building', id: buildingId } : { type: 'floor', id: floorId },
+      scope,
       steps,
-      mapReadiness: readiness,
+      mapReadiness,
+      floors,
       textLiveChanged: false,
       historicalDataChanged: false,
     };
@@ -830,7 +921,7 @@ export async function prepareFloorplans(args = {}) {
       ok: false,
       kind: 'density.floorplan-preparation',
       dataDir,
-      scope: buildingId ? { type: 'building', id: buildingId } : { type: 'floor', id: floorId },
+      scope,
       steps: error.steps ?? steps,
       error: oneLine(error.message),
       textLiveChanged: false,
@@ -848,6 +939,7 @@ async function runCapabilityJsonCommand(args, options) {
   const capabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs });
   const capabilitiesDiscoveredAt = Date.now();
   const cliInfo = safeCliInfo(cli);
+  const cliArgs = typeof options.cliArgs === 'function' ? options.cliArgs(capabilities) : options.cliArgs;
   const performance = (commandCompletedAt = capabilitiesDiscoveredAt) => options.measurePerformance
     ? {
         performance: {
@@ -873,7 +965,7 @@ async function runCapabilityJsonCommand(args, options) {
     };
   }
 
-  const result = await runDensity(cli, options.cliArgs, {
+  const result = await runDensity(cli, cliArgs, {
     dataDir,
     allowFailure: true,
     timeoutMs,
@@ -891,12 +983,15 @@ async function runCapabilityJsonCommand(args, options) {
   }
 
   try {
+    const payload = JSON.parse(result.stdout);
+    const derivedDatasetRepair = startDerivedDatasetRepair({ cli, capabilities, dataDir, derivedDataset: payload?.derivedDataset });
     return {
       ok: true,
       dataDir,
       cli: cliInfo,
       ...performance(commandCompletedAt),
-      [options.payloadKey]: JSON.parse(result.stdout),
+      [options.payloadKey]: payload,
+      ...(derivedDatasetRepair ? { derivedDatasetRepair } : {}),
     };
   } catch (error) {
     return {
@@ -911,18 +1006,24 @@ async function runCapabilityJsonCommand(args, options) {
   }
 }
 
+export const DEFAULT_SCHEMA_BUDGET_MS = 10000;
+
 export async function getDbSchema(args = {}) {
   const tables = Array.isArray(args.tables)
     ? args.tables.filter((table) => typeof table === 'string' && table.trim()).map((table) => table.trim())
     : [];
+  const budgetMs = args.budgetMs === undefined ? DEFAULT_SCHEMA_BUDGET_MS : Number(args.budgetMs);
+  if (!Number.isFinite(budgetMs) || budgetMs < 0) throw new Error('budgetMs must be a non-negative number.');
   return runCapabilityJsonCommand(args, {
     capability: 'getDbSchema',
-    cliArgs: [
+    // The CLI returns a partial schema when the budget ends, so the process timeout only guards a hung CLI.
+    cliArgs: (capabilities) => [
       'get-db-schema',
       ...(tables.length > 0 ? ['--tables', tables.join(',')] : []),
+      ...(capabilities.commands?.getDbSchemaBudget ? ['--budget-ms', String(budgetMs)] : []),
       '--format', 'json',
     ],
-    timeoutMs: 15000,
+    timeoutMs: budgetMs + 5000,
     unsupportedError: 'This Density CLI does not support get-db-schema yet.',
     timedOutError: 'DB schema lookup timed out.',
     responseLabel: 'DB schema',
@@ -1433,6 +1534,18 @@ const readStatusState = async (dataDir) => {
   }
 };
 
+const readStatusSyncStreams = async (dataDir, state) => {
+  let syncState;
+  try {
+    syncState = await readJsonFile(path.join(dataDir, 'sync-state.json'));
+  } catch (error) {
+    throw new Error(`Unable to read Density sync state: ${oneLine(error.message)}`);
+  }
+  const stored = isRecord(syncState?.streams) ? syncState.streams : {};
+  // Entries that an older CLI left inside state.json win until the CLI migrates them.
+  return isRecord(state.streams) ? { ...stored, ...state.streams } : stored;
+};
+
 const uniqueParquetStorage = (storage) => {
   const tables = new Map();
   for (const table of [...storage.tables, ...storage.fastQuestionTables]) {
@@ -1449,12 +1562,13 @@ const uniqueParquetStorage = (storage) => {
 
 export async function status(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
-  const [state, storage, backgroundDeepSync] = await Promise.all([
+  const [state, storage, backgroundDeepSync, derivedDataset] = await Promise.all([
     readStatusState(dataDir),
     storageReport(dataDir),
     latestDeepSyncStatus(dataDir),
+    derivedDatasetState({ dataDir }),
   ]);
-  const streams = summarizeSyncState(isRecord(state.streams) ? state.streams : {});
+  const streams = summarizeSyncState(await readStatusSyncStreams(dataDir, state));
   const latestSyncAt = latestIso(streams.map((stream) => stream.latestSyncAt));
   const parquet = uniqueParquetStorage(storage);
   const tokenExpiresAt = typeof state.token?.expiresAt === 'string' ? state.token.expiresAt : undefined;
@@ -1501,6 +1615,7 @@ export async function status(args = {}) {
       canonicalParquetReady: storage.parquetReady,
       fastQuestionsReady: storage.fastQuestionsReady,
     },
+    derivedDataset,
     readiness: {
       localDataReady,
       status: localDataReady ? 'ready' : 'sync_required',
@@ -1629,17 +1744,38 @@ export async function localDataProfile(args = {}) {
 
 export async function dataHealthReport(args = {}) {
   const profile = await localDataProfile(args);
+  const derivedDataset = await derivedDatasetState({ dataDir: profile.dataDir });
   const timestampCoverageChecked = Boolean(profile.profile?.coverage?.firstTimestamp && profile.profile?.coverage?.lastTimestamp);
   return {
     ...profile,
     tool: 'data_health_report',
+    derivedDataset,
     checks: [
       { name: 'canonical parquet ready', ok: profile.storage.parquetReady },
       { name: 'fast question parquet ready', ok: profile.storage.fastQuestionsReady },
+      { name: 'derived local_metrics dataset current', ok: derivedDataset.state === 'current', detail: derivedDataset.reason },
       { name: 'timestamp coverage checked', ok: timestampCoverageChecked, optional: !timestampCoverageChecked, detail: profile.freshness.reason },
     ],
   };
 }
+
+const INSTALL_MANAGED_CLI_ACTION = {
+  id: 'install_managed_cli',
+  tool: 'install_managed_cli',
+  label: 'Install the plugin-managed Density runtime.',
+};
+
+const chooseScopeAction = (clarification) => ({
+  id: 'choose_scope',
+  label: clarification?.suggestions?.length
+    ? 'Call live_wayfinding_status again with floorId set to a suggestion id from clarification.suggestions.'
+    : 'Call live_wayfinding_status again with a building or floor name.',
+});
+
+const CHECK_LIVE_CLI_ACTION = {
+  id: 'check_live_wayfinding_cli',
+  label: 'Update or run a Density CLI with live wayfinding JSON support.',
+};
 
 const liveWayfindingFailure = ({ query, dataDir, error, artifactRequired }) => ({
   ok: false,
@@ -1656,10 +1792,38 @@ const liveWayfindingFailure = ({ query, dataDir, error, artifactRequired }) => (
   userVisiblePrimaryActions: 1,
 });
 
+// Fallback for a CLI without commands.liveFloorplan: a second process renders the floorplan.
+const attachSeparateFloorplan = async ({ cli, dataDir, timeoutMs, parsed, floorId }) => {
+  const floorplanCommand = ['wayfinding', 'floorplan', '--floor', floorId, '--format', 'json'];
+  const floorplanSpaceIds = [
+    ...(Array.isArray(parsed.matchedSpaceIds) ? parsed.matchedSpaceIds : []),
+    ...wayfindingSpaces(parsed).map((space) => space?.spaceId),
+  ];
+  const matchedSpaceIds = [...new Set(
+    floorplanSpaceIds.filter((spaceId) => typeof spaceId === 'string' && spaceId.length > 0),
+  )];
+  for (const spaceId of matchedSpaceIds) {
+    floorplanCommand.push('--focus-space', spaceId);
+  }
+  const floorplanResult = await runDensity(cli, floorplanCommand, {
+    dataDir,
+    allowFailure: true,
+    timeoutMs,
+  });
+  if (floorplanResult.code === 0 && !floorplanResult.timedOut) {
+    const floorplan = parseJsonOutput(floorplanResult.stdout, 'Live floorplan');
+    parsed.floorplanArtifact = floorplan.artifact;
+    parsed.floorplanPanelTarget = floorplan.panelTarget;
+  } else {
+    parsed.floorplanError = floorplanResult.timedOut
+      ? 'Live floorplan timed out.'
+      : oneLine(floorplanResult.stderr || floorplanResult.stdout);
+  }
+};
+
 export async function liveWayfindingStatus(args = {}) {
   const query = String(args.query || '').trim();
   if (!query) throw new Error('query is required.');
-  const cli = await requireCli();
   const dataDir = resolveDataDir(args.dataDir);
   const timeoutMs = args.timeoutMs === undefined ? 30000 : Number(args.timeoutMs);
   const maxAgeSeconds = args.maxAgeSeconds === undefined ? 30 : Number(args.maxAgeSeconds);
@@ -1672,13 +1836,37 @@ export async function liveWayfindingStatus(args = {}) {
   const building = String(args.building || '').trim();
   const floor = String(args.floor || '').trim();
   if (args.floorId && floor) throw new Error('Provide floor or floorId, not both.');
+  const artifactRequired = args.floorplanArtifactRequired;
+  let cli;
+  try {
+    cli = await requireCli();
+  } catch (error) {
+    if (!error?.nextAction) throw error;
+    return { ...liveWayfindingFailure({ query, dataDir, error: error.message, artifactRequired }), nextAction: error.nextAction };
+  }
+  // Old builds advertise wayfindingLiveAvailability too; only liveScopeQueries proves name resolution.
+  const capabilities = await discoverCliCapabilities(cli, { dataDir });
+  const commands = capabilities.commands ?? {};
+  if ((building || floor) && !commands.liveScopeQueries) {
+    return {
+      ...liveWayfindingFailure({
+        query,
+        dataDir,
+        error: `Density CLI ${capabilities.version ?? 'unknown'} cannot resolve building or floor names.`,
+        artifactRequired,
+      }),
+      nextAction: INSTALL_MANAGED_CLI_ACTION,
+    };
+  }
   let floorId = args.floorId ? String(args.floorId) : undefined;
+  const singleProcessFloorplan = args.includeFloorplan === true && Boolean(commands.liveFloorplan);
   const command = ['live', query, '--format', 'json'];
   if (floorId) command.push('--floor', floorId);
   if (building) command.push('--building-query', building);
   if (floor) command.push('--floor-query', floor);
   command.push('--live-timeout-ms', String(timeoutMs));
   command.push('--max-age-seconds', String(maxAgeSeconds));
+  if (singleProcessFloorplan) command.push('--floorplan');
   const result = await runDensity(cli, command, {
     dataDir,
     allowFailure: true,
@@ -1686,22 +1874,13 @@ export async function liveWayfindingStatus(args = {}) {
   });
   if (result.code !== 0 || result.timedOut) {
     return {
-      ok: false,
-      sourceLayer: SOURCE_LAYERS.liveFeed,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.liveFeed),
-      liveAvailable: false,
-      walkableRecommendation: false,
-      query,
-      dataDir,
-      error: result.timedOut ? 'Live wayfinding timed out.' : oneLine(result.stderr || result.stdout),
-      fallbackAvailable: true,
-      fallback: 'Use historical utilization only as context; it is not a walkable recommendation.',
-      artifactRequired: args.floorplanArtifactRequired ? 'floorplan' : undefined,
-      nextAction: {
-        id: 'check_live_wayfinding_cli',
-        label: 'Update or run a Density CLI with live wayfinding JSON support.',
-      },
-      userVisiblePrimaryActions: 1,
+      ...liveWayfindingFailure({
+        query,
+        dataDir,
+        error: result.timedOut ? 'Live wayfinding timed out.' : oneLine(result.stderr || result.stdout),
+        artifactRequired,
+      }),
+      nextAction: CHECK_LIVE_CLI_ACTION,
     };
   }
   let parsed;
@@ -1709,101 +1888,80 @@ export async function liveWayfindingStatus(args = {}) {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
     return {
-      ok: false,
-      sourceLayer: SOURCE_LAYERS.liveFeed,
-      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.liveFeed),
-      liveAvailable: false,
-      walkableRecommendation: false,
-      query,
-      dataDir,
-      error: `Live wayfinding response was not JSON: ${error.message}`,
-      fallbackAvailable: true,
-      fallback: 'Use historical utilization only as context; it is not a walkable recommendation.',
-      artifactRequired: args.floorplanArtifactRequired ? 'floorplan' : undefined,
-      nextAction: {
-        id: 'check_live_wayfinding_cli',
-        label: 'Update or run a Density CLI with live wayfinding JSON support.',
-      },
-      userVisiblePrimaryActions: 1,
+      ...liveWayfindingFailure({
+        query,
+        dataDir,
+        error: `Live wayfinding response was not JSON: ${error.message}`,
+        artifactRequired,
+      }),
+      nextAction: CHECK_LIVE_CLI_ACTION,
     };
   }
+  const profile = { organizationId: parsed?.organizationId, organizationName: parsed?.organizationName };
   if (parsed?.kind === 'density.live-error.v1') {
     return {
       ...liveWayfindingFailure({
         query,
         dataDir,
         error: parsed.error?.message || 'Live wayfinding failed.',
-        artifactRequired: args.floorplanArtifactRequired,
+        artifactRequired,
       }),
-      clarification: parsed.clarification,
+      ...profile,
+      ...(parsed.clarification
+        ? { needsInput: true, clarification: parsed.clarification, nextAction: chooseScopeAction(parsed.clarification) }
+        : {}),
     };
   }
   floorId ??= parsed?.query?.floorId;
-  if (args.includeFloorplan === true && floorId) {
-    const floorplanCommand = ['wayfinding', 'floorplan', '--floor', floorId, '--format', 'json'];
-    const floorplanSpaceIds = [
-      ...(Array.isArray(parsed.matchedSpaceIds) ? parsed.matchedSpaceIds : []),
-      ...wayfindingSpaces(parsed).map((space) => space?.spaceId),
-    ];
-    const matchedSpaceIds = [...new Set(
-      floorplanSpaceIds.filter((spaceId) => typeof spaceId === 'string' && spaceId.length > 0),
-    )];
-    for (const spaceId of matchedSpaceIds) {
-      floorplanCommand.push('--focus-space', spaceId);
-    }
-    const floorplanResult = await runDensity(cli, floorplanCommand, {
-      dataDir,
-      allowFailure: true,
-      timeoutMs,
-    });
-    if (floorplanResult.code === 0 && !floorplanResult.timedOut) {
-      const floorplan = parseJsonOutput(floorplanResult.stdout, 'Live floorplan');
-      parsed.floorplanArtifact = floorplan.artifact;
-      parsed.floorplanPanelTarget = floorplan.panelTarget;
-    } else {
-      parsed.floorplanError = floorplanResult.timedOut
-        ? 'Live floorplan timed out.'
-        : oneLine(floorplanResult.stderr || floorplanResult.stdout);
-    }
+  if (args.includeFloorplan === true && !singleProcessFloorplan && floorId) {
+    await attachSeparateFloorplan({ cli, dataDir, timeoutMs, parsed, floorId });
   }
   const availabilityMode = parsed.availabilityMode;
-  const liveAvailable = availabilityMode === 'live';
-  const walkableRecommendation = liveAvailable && Array.isArray(parsed.candidates) && parsed.candidates.length > 0;
+  if (availabilityMode !== 'live') {
+    return {
+      ok: false,
+      needsInput: true,
+      sourceLayer: SOURCE_LAYERS.liveFeed,
+      sourceBadge: sourceBadgeFor(SOURCE_LAYERS.liveFeed),
+      liveAvailable: false,
+      walkableRecommendation: false,
+      query,
+      dataDir,
+      ...profile,
+      availabilityMode,
+      clarification: parsed.clarification,
+      artifactRequired: artifactRequired ? 'floorplan' : undefined,
+      nextAction: chooseScopeAction(parsed.clarification),
+      userVisiblePrimaryActions: 1,
+    };
+  }
   const response = {
     ok: true,
     sourceLayer: SOURCE_LAYERS.liveFeed,
     sourceBadge: sourceBadgeFor(SOURCE_LAYERS.liveFeed),
-    liveAvailable,
-    walkableRecommendation,
+    liveAvailable: true,
+    walkableRecommendation: Array.isArray(parsed.candidates) && parsed.candidates.length > 0,
     query,
     dataDir,
+    ...profile,
     availabilityMode,
     freshness: {
-      source: liveAvailable ? 'live-presence:wayfinding' : availabilityMode ?? 'unknown',
-      maxAgeSeconds: liveAvailable ? maxAgeSeconds : 0,
+      source: 'live-presence:wayfinding',
+      maxAgeSeconds,
       requestedMaxAgeSeconds: maxAgeSeconds,
-      fallbackAvailable: !liveAvailable,
+      fallbackAvailable: false,
     },
     summary: compactWayfindingSummary(parsed),
-    artifact: liveAvailable ? parsed.artifact : undefined,
-    html: liveAvailable ? parsed.artifact?.html : undefined,
-    panelTarget: liveAvailable ? parsed.panelTarget : undefined,
-    floorplanArtifact: liveAvailable ? parsed.floorplanArtifact : undefined,
-    floorplanHtml: liveAvailable ? parsed.floorplanArtifact?.html : undefined,
-    floorplanPanelTarget: liveAvailable ? parsed.floorplanPanelTarget : undefined,
-    floorplanError: liveAvailable ? parsed.floorplanError : undefined,
-    fallback: liveAvailable ? undefined : 'This is not live availability; use it only as fallback context, not as a walkable recommendation.',
-    explanation: liveAvailable
-      ? undefined
-      : `The CLI returned ${availabilityMode ?? 'non-live'} wayfinding data, so this response cannot claim current availability or make a walkable recommendation.`,
-    artifactRequired: args.floorplanArtifactRequired ? 'floorplan' : undefined,
-    nextAction: liveAvailable
-      ? undefined
-      : {
-          id: 'refresh_live_wayfinding',
-          label: 'Refresh from a live Density wayfinding source before treating availability as current.',
-        },
-    userVisiblePrimaryActions: liveAvailable ? 0 : 1,
+    artifact: parsed.artifact,
+    html: parsed.artifact?.html,
+    panelTarget: parsed.panelTarget,
+    floorplanArtifact: parsed.floorplanArtifact,
+    floorplanHtml: parsed.floorplanArtifact?.html,
+    floorplanPanelTarget: parsed.floorplanPanelTarget,
+    floorplanError: parsed.floorplanError,
+    floorplanClarification: parsed.floorplanClarification,
+    artifactRequired: artifactRequired ? 'floorplan' : undefined,
+    userVisiblePrimaryActions: 0,
   };
   if (args.includeRaw === true) response.result = parsed;
   if (args.includeDiagnostics === true) {
@@ -2165,6 +2323,12 @@ export async function createDemoCustomer(args = {}) {
 export async function requireCli() {
   const cli = await resolveDensityCli();
   if (!cli) throw new Error('Density CLI not found. Run install_managed_cli, set DENSITY_CLI_BIN, set DENSITY_CLI_REPO, or install density on PATH.');
+  if (cli.managedMissing) {
+    throw Object.assign(
+      new Error(`The plugin pins Density CLI ${cli.managedMissing.version}, but it is not installed: ${cli.managedMissing.reason}. Run install_managed_cli.`),
+      { nextAction: INSTALL_MANAGED_CLI_ACTION }
+    );
+  }
   await ensureDensityCliBuilt(cli);
   return cli;
 }

@@ -29,6 +29,7 @@ import {
   status,
 } from '../scripts/density-core.mjs';
 import { localHtmlResourceLinks } from './artifact-content.mjs';
+import { readStateFile } from './state-file.mjs';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -325,9 +326,11 @@ const tools = [
     },
     additionalProperties: false,
   }, localReadOnlyTool),
-  tool('available_buildings', 'List portfolio building readiness: live/planning status, go-live state, metric coverage, geometry, chart queryability, and live wayfinding eligibility. Do not use before a named-building live availability request.', {
+  tool('available_buildings', 'List building readiness: lifecycle status, go-live state, geometry, chart queryability, and live wayfinding eligibility. Use building to return one building by name or id. Set includeMetrics true only when the question needs metric coverage; it scans the full metric history. Do not use before a named-building live availability request.', {
     type: 'object',
     properties: {
+      building: { type: 'string', minLength: 1, description: 'Building name or id in the selected organization. Returns only the matching building, or suggestions when the name is ambiguous.' },
+      includeMetrics: { type: 'boolean', default: false, description: 'When true, add metric coverage per building. This scans every local metric row.' },
       dataDir: { type: 'string' },
       timeoutMs: { type: 'number', minimum: 1, maximum: 120000 },
     },
@@ -341,17 +344,17 @@ const tools = [
     },
     additionalProperties: false,
   }, localReadOnlyTool),
-  tool('live_wayfinding_status', 'Use for current, now, live, open, free, occupied, or available space questions. A uniquely resolved building is a complete scope. If a floor is unknown or ambiguous, return its clarification instead of listing the portfolio. Reads the live feed and returns liveAvailable false rather than substituting historical data.', {
+  tool('live_wayfinding_status', 'Use for current, now, live, open, free, occupied, or available space questions. Pass building and floor as names. A uniquely resolved building is a complete scope. When the response has ok false and needsInput true, call again with floorId set to a suggestion id from clarification.suggestions. Do not call available_buildings to find a floor.', {
     type: 'object',
     properties: {
       query: { type: 'string' },
       building: { type: 'string', description: 'Building name or ID in the selected organization. May be combined with floor.' },
       floor: { type: 'string', description: 'Floor name or ID. When building is supplied, this resolves only within that building.' },
-      floorId: { type: 'string', description: 'Exact floor ID. Use floor for a natural-language floor name.' },
+      floorId: { type: 'string', description: 'Exact floor ID, such as a suggestion id from a needsInput response. Use floor for a floor name.' },
       dataDir: { type: 'string' },
       timeoutMs: { type: 'number', minimum: 1, maximum: 30000 },
       maxAgeSeconds: { type: 'number', minimum: 1, maximum: 300 },
-      includeFloorplan: { type: 'boolean', description: 'When true, also return a separate interactive live floorplan focused on matching spaces. Requires one exact floor.' },
+      includeFloorplan: { type: 'boolean', description: 'When true, also return an interactive live floorplan focused on the matching spaces. Needs one floor. When the answer spans several floors, floorplanClarification lists the floors to choose from.' },
     },
     required: ['query'],
     additionalProperties: false,
@@ -436,12 +439,12 @@ let sessionSourceBinding;
 
 async function configuredDataSource(dataDir) {
   try {
-    const state = JSON.parse(await readFile(path.join(dataDir, 'state.json'), 'utf8'));
+    const state = await readStateFile(dataDir);
+    if (state === undefined) return 'local';
     if (state.dataSource === undefined || state.dataSource === 'local') return 'local';
     if (state.dataSource === 'remote') return 'remote';
     throw new Error('The Density data source is invalid.');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return 'local';
+  } catch {
     throw new Error('The Density data source is unavailable.');
   }
 }
@@ -483,10 +486,10 @@ async function remoteMcpResponse(message) {
 
 async function hasDemoModeState(dataDir) {
   try {
-    const state = JSON.parse(await readFile(path.join(dataDir, 'state.json'), 'utf8'));
+    const state = await readStateFile(dataDir);
+    if (state === undefined) return false;
     return Object.hasOwn(state, 'demoMode');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
+  } catch {
     throw new Error('Demo mode status is unavailable.');
   }
 }
@@ -576,7 +579,7 @@ async function handleRawMessage(raw) {
             if (response?.ok === false) {
               throw new Error('Density schema is not ready.');
             }
-            const schema = response?.schema ?? response;
+            const { dataDir: _schemaDataDir, derivedDataset: _derivedDataset, ...schema } = response?.schema ?? response;
             text = JSON.stringify(schema, null, 2);
             const confirmed = await sessionDemoMode(dataDir);
             if (confirmed.enabled !== demo.enabled || confirmed.generation !== demo.generation) {
@@ -585,7 +588,8 @@ async function handleRawMessage(raw) {
             if (demo.enabled && !text.includes('demo_org')) {
               throw new Error('Demo mode did not return an aliased schema.');
             }
-            schemaTextByDataDir.set(cacheKey, text);
+            // A partial schema is served but not cached, so the next read can complete it.
+            if (schema.partial !== true) schemaTextByDataDir.set(cacheKey, text);
           }
           sendResult(message.id, {
             contents: [{ uri, mimeType: 'application/json', text }],
@@ -807,7 +811,7 @@ function tool(name, description, inputSchema, annotations) {
 function jsonTool(value) {
   return {
     content: [
-      { type: 'text', text: JSON.stringify(value, null, 2) },
+      { type: 'text', text: JSON.stringify(value) },
       ...localHtmlResourceLinks(value),
     ],
   };
@@ -857,7 +861,7 @@ async function queryDbTool(value, demoEnabled = false, usePublicEnvelope = false
 }
 
 function structuredJsonTool(value, responseMeta) {
-  const content = [{ type: 'text', text: JSON.stringify(value, null, 2) }];
+  const content = [{ type: 'text', text: JSON.stringify(value) }];
   return negotiatedProtocolVersion >= '2025-06-18'
     ? { ...(responseMeta ? { _meta: responseMeta } : {}), structuredContent: value, content }
     : { content };

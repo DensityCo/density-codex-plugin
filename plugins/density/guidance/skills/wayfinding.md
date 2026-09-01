@@ -22,6 +22,7 @@ Always use `../../guidance/design.md` for visual artifacts.
 Keep user-visible progress updates at the workplace level:
 
 - Say what decision you are making for the user, not which skill, MCP tool, CLI command, cache path, SQL query, or local file is being used.
+- Never mention IDs, tools, or lookups in a progress update.
 - Do not mention parser misses, reserved SQL words, DuckDB internals, shell commands, skill loading, or tool routing unless the user explicitly asks for debugging.
 - If a query misroutes or needs a retry, recover quietly and disclose only the resulting source, scope, freshness, confidence, or caveat needed for the final answer.
 - When progress helps, state the scope, time window, or completeness choice that affects the answer.
@@ -31,7 +32,9 @@ Keep user-visible progress updates at the workplace level:
 - Treat "available now", "open", "occupied", "live", "real-time", and "wayfinding" as current-state questions.
 - Use `live_wayfinding_status` or live availability/presence data when available.
 - For a named building, call `live_wayfinding_status` directly with that building. A uniquely resolved building is a complete scope.
-- If a floor is unknown or ambiguous, ask one clarification and wait. Do not call `available_buildings` as a fallback.
+- Pass `building` and `floor` as names in the normal call. The tool resolves the names.
+- When the response has `needsInput`, read `clarification.suggestions`. Call again with a suggestion `id` as `floorId`, or ask one clarification when the user must choose.
+- If a floor is unknown or ambiguous, ask one clarification and wait. Do not call `available_buildings` to find a floor.
 - Use `available_buildings` only for explicit lifecycle, readiness, building-list, or portfolio-selection questions.
 - Make a walkable or navigation recommendation only when the scoped live response includes route or floorplan support. Otherwise report availability only.
 - The live wayfinding source is floor presence, such as `v3/{orgId}/analytics/ws/floor/{floorId}/presence`, when the CLI or app can access it.
