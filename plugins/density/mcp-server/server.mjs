@@ -28,6 +28,7 @@ import {
   setup,
   status,
 } from '../scripts/density-core.mjs';
+import { localHtmlResourceLinks } from './artifact-content.mjs';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -804,7 +805,12 @@ function tool(name, description, inputSchema, annotations) {
 }
 
 function jsonTool(value) {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
+  return {
+    content: [
+      { type: 'text', text: JSON.stringify(value, null, 2) },
+      ...localHtmlResourceLinks(value),
+    ],
+  };
 }
 
 const demoPayloadFailed = (value) => value?.ok === false
