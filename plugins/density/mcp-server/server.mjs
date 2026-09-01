@@ -344,8 +344,8 @@ const tools = [
     type: 'object',
     properties: {
       query: { type: 'string' },
-      building: { type: 'string', description: 'Building name or ID in the selected organization.' },
-      floor: { type: 'string', description: 'Floor name or ID in the selected organization.' },
+      building: { type: 'string', description: 'Building name or ID in the selected organization. May be combined with floor.' },
+      floor: { type: 'string', description: 'Floor name or ID. When building is supplied, this resolves only within that building.' },
       floorId: { type: 'string', description: 'Exact floor ID. Use floor for a natural-language floor name.' },
       dataDir: { type: 'string' },
       timeoutMs: { type: 'number', minimum: 1, maximum: 30000 },

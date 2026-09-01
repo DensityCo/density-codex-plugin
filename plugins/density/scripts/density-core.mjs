@@ -265,6 +265,8 @@ const compactWayfindingSummary = (parsed) => {
       const name = safeWayfindingName(space);
       return name ? {
         name,
+        floorName: space?.floorName,
+        buildingName: space?.buildingName,
         state: spaceAvailabilityState(space),
         occupied: typeof space?.occupied === 'boolean' ? space.occupied : undefined,
         observedAt: space?.observedAt,
@@ -276,7 +278,9 @@ const compactWayfindingSummary = (parsed) => {
     .slice(0, 5);
   return {
     availabilityMode: parsed?.availabilityMode,
+    elapsedMs: Number.isFinite(parsed?.elapsedMs) ? parsed.elapsedMs : undefined,
     spacesChecked: Number.isFinite(parsed?.checkedSpaceCount) ? parsed.checkedSpaceCount : spaces.length,
+    floorsChecked: Number.isFinite(parsed?.checkedFloorCount) ? parsed.checkedFloorCount : undefined,
     counts,
     spaces: namedSpaces.length ? namedSpaces : undefined,
   };
@@ -1667,46 +1671,12 @@ export async function liveWayfindingStatus(args = {}) {
   }
   const building = String(args.building || '').trim();
   const floor = String(args.floor || '').trim();
-  if (building && floor) throw new Error('Provide a building or a floor, not both.');
   if (args.floorId && floor) throw new Error('Provide floor or floorId, not both.');
   let floorId = args.floorId ? String(args.floorId) : undefined;
-  let buildingId;
-  const scopeQuery = floor || building;
-  if (scopeQuery) {
-    const scopeType = floor ? 'floor' : 'building';
-    const scopeResult = await runDensity(cli, [
-      'onboard', 'scope', scopeQuery,
-      '--scope-type', scopeType,
-      '--format', 'json',
-    ], { dataDir, allowFailure: true, timeoutMs });
-    if (scopeResult.code !== 0 || scopeResult.timedOut) {
-      return liveWayfindingFailure({
-        query,
-        dataDir,
-        error: scopeResult.timedOut ? 'Live scope resolution timed out.' : oneLine(scopeResult.stderr || scopeResult.stdout),
-        artifactRequired: args.floorplanArtifactRequired,
-      });
-    }
-    const scope = parseJsonOutput(scopeResult.stdout, 'Live scope resolution');
-    if (!scope.ok || !scope.scope?.id) {
-      return {
-        ...liveWayfindingFailure({
-          query,
-          dataDir,
-          error: scope.reason === 'ambiguous'
-            ? `The ${scopeType} name is ambiguous.`
-            : `The ${scopeType} was not found in the selected organization.`,
-          artifactRequired: args.floorplanArtifactRequired,
-        }),
-        clarification: scope.suggestions,
-      };
-    }
-    if (floor) floorId = scope.scope.id;
-    else buildingId = scope.scope.id;
-  }
   const command = ['live', query, '--format', 'json'];
   if (floorId) command.push('--floor', floorId);
-  if (buildingId) command.push('--building', buildingId);
+  if (building) command.push('--building-query', building);
+  if (floor) command.push('--floor-query', floor);
   command.push('--live-timeout-ms', String(timeoutMs));
   command.push('--max-age-seconds', String(maxAgeSeconds));
   const result = await runDensity(cli, command, {
@@ -1757,6 +1727,18 @@ export async function liveWayfindingStatus(args = {}) {
       userVisiblePrimaryActions: 1,
     };
   }
+  if (parsed?.kind === 'density.live-error.v1') {
+    return {
+      ...liveWayfindingFailure({
+        query,
+        dataDir,
+        error: parsed.error?.message || 'Live wayfinding failed.',
+        artifactRequired: args.floorplanArtifactRequired,
+      }),
+      clarification: parsed.clarification,
+    };
+  }
+  floorId ??= parsed?.query?.floorId;
   if (args.includeFloorplan === true && floorId) {
     const floorplanCommand = ['wayfinding', 'floorplan', '--floor', floorId, '--format', 'json'];
     const floorplanSpaceIds = [
