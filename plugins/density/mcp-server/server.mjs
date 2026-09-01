@@ -324,7 +324,7 @@ const tools = [
     },
     additionalProperties: false,
   }, localReadOnlyTool),
-  tool('available_buildings', 'List building readiness before analysis: live/planning status, go-live state, metric coverage, geometry, chart queryability, and live wayfinding eligibility.', {
+  tool('available_buildings', 'List portfolio building readiness: live/planning status, go-live state, metric coverage, geometry, chart queryability, and live wayfinding eligibility. Do not use before a named-building live availability request.', {
     type: 'object',
     properties: {
       dataDir: { type: 'string' },
@@ -340,7 +340,7 @@ const tools = [
     },
     additionalProperties: false,
   }, localReadOnlyTool),
-  tool('live_wayfinding_status', 'Use for current, now, live, open, free, occupied, or available space questions. Reads the live feed and returns liveAvailable false rather than substituting historical data.', {
+  tool('live_wayfinding_status', 'Use for current, now, live, open, free, occupied, or available space questions. A uniquely resolved building is a complete scope. If a floor is unknown or ambiguous, return its clarification instead of listing the portfolio. Reads the live feed and returns liveAvailable false rather than substituting historical data.', {
     type: 'object',
     properties: {
       query: { type: 'string' },

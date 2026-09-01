@@ -49,9 +49,11 @@ files, skills, or cache operations.
 - Use the `data-health` skill for missing, stale, zero, or inconsistent local data.
 - Use the `sensor-health` skill for current cloud sensor status and historical sensor uptime.
 
-Use `available_buildings` for lifecycle questions, scope selection when names
-are ambiguous, or diagnosis after missing historical evidence. Current status
-must not remove spaces with valid historical rows.
+Use `available_buildings` for lifecycle questions, portfolio scope selection,
+or diagnosis after missing historical evidence. Do not use `available_buildings`
+to resolve a live floor or building request. The scoped live tool returns the
+relevant suggestions. Current status must not remove spaces with valid
+historical rows.
 
 ## Historical queries
 

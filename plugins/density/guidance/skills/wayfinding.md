@@ -30,7 +30,10 @@ Keep user-visible progress updates at the workplace level:
 
 - Treat "available now", "open", "occupied", "live", "real-time", and "wayfinding" as current-state questions.
 - Use `live_wayfinding_status` or live availability/presence data when available.
-- Before making a walkable recommendation for a building, use `available_buildings` when available and require `liveWayfindingEligible: true`.
+- For a named building, call `live_wayfinding_status` directly with that building. A uniquely resolved building is a complete scope.
+- If a floor is unknown or ambiguous, ask one clarification and wait. Do not call `available_buildings` as a fallback.
+- Use `available_buildings` only for explicit lifecycle, readiness, building-list, or portfolio-selection questions.
+- Make a walkable or navigation recommendation only when the scoped live response includes route or floorplan support. Otherwise report availability only.
 - The live wayfinding source is floor presence, such as `v3/{orgId}/analytics/ws/floor/{floorId}/presence`, when the CLI or app can access it.
 - Clearly separate live status from historical popularity.
 - If a live source is unavailable, say that plainly and offer the closest historical alternative as a fallback, not as a replacement.

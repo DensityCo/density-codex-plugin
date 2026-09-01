@@ -240,12 +240,23 @@ test('Density skills preserve building lifecycle and go-live analysis rules', as
   const density = await readFile(path.join(skillsDir, 'density', 'SKILL.md'), 'utf8');
   const systemPrompt = await readFile(path.join(guidanceDir, 'density-system-prompt.md'), 'utf8');
   const wayfinding = await readFile(path.join(skillsDir, 'wayfinding', 'SKILL.md'), 'utf8');
+  const wayfindingGuidance = await readFile(path.join(guidanceDir, 'skills', 'wayfinding.md'), 'utf8');
+  const server = await readFile(path.join(pluginRoot, 'mcp-server', 'server.mjs'), 'utf8');
 
   assert.match(density, /available_buildings/, 'parent skill should name the lifecycle readiness tool');
   assert.match(density, /lifecycle questions/, 'parent skill should route explicit lifecycle work');
   assert.match(systemPrompt, /Current lifecycle status must not erase valid historical evidence\./, 'system prompt should preserve historical evidence');
-  assert.match(density, /Current status[\s\S]+must not remove spaces with valid historical rows\./, 'parent skill should preserve the lifecycle boundary');
-  assert.match(wayfinding, /liveWayfindingEligible/, 'wayfinding skill should require live wayfinding eligibility');
+  assert.match(density, /Current status must not remove spaces with valid\s+historical rows\./, 'parent skill should preserve the lifecycle boundary');
+  for (const guidance of [wayfinding, wayfindingGuidance]) {
+    assert.match(guidance, /named building[\s\S]+directly/, 'wayfinding should route a named building directly');
+    assert.match(guidance, /unknown or ambiguous[\s\S]+ask one clarification/, 'wayfinding should clarify an unresolved floor');
+    assert.match(guidance, /Do not call `available_buildings`/, 'wayfinding should prohibit portfolio lookup fallback');
+    assert.match(guidance, /walkable or navigation recommendation[\s\S]+route or floorplan support/, 'wayfinding should preserve the navigation eligibility boundary');
+  }
+  assert.match(density, /Do not use `available_buildings`\s+to resolve a live floor or building request\./, 'parent skill should preserve the live scope boundary');
+  assert.match(systemPrompt, /For a live request, use the scoped tool's suggestions\s+and ask one clarification\./, 'system prompt should preserve scoped live clarification');
+  assert.match(server, /Do not use before a named-building live availability request\./, 'tool description should prevent portfolio scans for named buildings');
+  assert.match(server, /A uniquely resolved building is a complete scope\./, 'live tool should describe the direct building route');
 });
 
 test('Density guidance preserves portable setup, data-health, and live-wayfinding rules', async () => {
