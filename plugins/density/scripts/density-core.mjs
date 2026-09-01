@@ -1758,9 +1758,21 @@ export async function liveWayfindingStatus(args = {}) {
     };
   }
   if (args.includeFloorplan === true && floorId) {
-    const floorplanResult = await runDensity(cli, [
-      'wayfinding', 'floorplan', '--floor', floorId, '--format', 'json',
-    ], { dataDir, allowFailure: true, timeoutMs });
+    const floorplanCommand = ['wayfinding', 'floorplan', '--floor', floorId, '--format', 'json'];
+    const floorplanSpaceIds = Array.isArray(parsed.matchedSpaceIds)
+      ? parsed.matchedSpaceIds
+      : wayfindingSpaces(parsed).map((space) => space?.spaceId);
+    const matchedSpaceIds = [...new Set(
+      floorplanSpaceIds.filter((spaceId) => typeof spaceId === 'string' && spaceId.length > 0),
+    )];
+    for (const spaceId of matchedSpaceIds) {
+      floorplanCommand.push('--focus-space', spaceId);
+    }
+    const floorplanResult = await runDensity(cli, floorplanCommand, {
+      dataDir,
+      allowFailure: true,
+      timeoutMs,
+    });
     if (floorplanResult.code === 0 && !floorplanResult.timedOut) {
       const floorplan = parseJsonOutput(floorplanResult.stdout, 'Live floorplan');
       parsed.floorplanArtifact = floorplan.artifact;
