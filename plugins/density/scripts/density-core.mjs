@@ -1661,7 +1661,7 @@ export async function liveWayfindingStatus(args = {}) {
   if (!query) throw new Error('query is required.');
   const cli = await requireCli();
   const dataDir = resolveDataDir(args.dataDir);
-  const timeoutMs = args.timeoutMs === undefined ? 5000 : Number(args.timeoutMs);
+  const timeoutMs = args.timeoutMs === undefined ? 30000 : Number(args.timeoutMs);
   const maxAgeSeconds = args.maxAgeSeconds === undefined ? 30 : Number(args.maxAgeSeconds);
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('timeoutMs must be a positive number.');
@@ -1682,7 +1682,7 @@ export async function liveWayfindingStatus(args = {}) {
   const result = await runDensity(cli, command, {
     dataDir,
     allowFailure: true,
-    timeoutMs,
+    timeoutMs: timeoutMs + 2000,
   });
   if (result.code !== 0 || result.timedOut) {
     return {
