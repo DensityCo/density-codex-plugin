@@ -1759,9 +1759,10 @@ export async function liveWayfindingStatus(args = {}) {
   }
   if (args.includeFloorplan === true && floorId) {
     const floorplanCommand = ['wayfinding', 'floorplan', '--floor', floorId, '--format', 'json'];
-    const floorplanSpaceIds = Array.isArray(parsed.matchedSpaceIds)
-      ? parsed.matchedSpaceIds
-      : wayfindingSpaces(parsed).map((space) => space?.spaceId);
+    const floorplanSpaceIds = [
+      ...(Array.isArray(parsed.matchedSpaceIds) ? parsed.matchedSpaceIds : []),
+      ...wayfindingSpaces(parsed).map((space) => space?.spaceId),
+    ];
     const matchedSpaceIds = [...new Set(
       floorplanSpaceIds.filter((spaceId) => typeof spaceId === 'string' && spaceId.length > 0),
     )];
