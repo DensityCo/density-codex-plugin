@@ -26,6 +26,15 @@ if (args[0] === 'live') {
     }));
     process.exit(0);
   }
+  if (process.env.DENSITY_TEST_EMPTY_MATCHED === '1') {
+    console.log(JSON.stringify({
+      availabilityMode: 'live',
+      matchedSpaceIds: [],
+      candidates: [{ spaceId: 'fallback_room_1', name: 'Fallback Room 1', available: true }],
+      unavailableMatches: [{ spaceId: 'fallback_room_2', name: 'Fallback Room 2', available: false }],
+    }));
+    process.exit(0);
+  }
   console.log(JSON.stringify({
     availabilityMode: 'live',
     matchedSpaceIds: ['room_1', 'room_2', 'room_3'],
@@ -73,6 +82,42 @@ test('floorUsageReport passes one floor and repeated focus spaces to the CLI', a
   assert.ok(viz);
   assert.equal(viz[viz.indexOf('--floor') + 1], 'floor_1');
   assert.deepEqual(viz.flatMap((value, index) => value === '--focus-space' ? [viz[index + 1]] : []), ['room_1', 'room_2']);
+});
+
+test('liveWayfindingStatus falls back when matchedSpaceIds is empty', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'density-live-floor-empty-focus-'));
+  const cli = path.join(dir, 'density-fake.mjs');
+  const calls = path.join(dir, 'calls.jsonl');
+  await writeFile(cli, fakeCli);
+  await chmod(cli, 0o755);
+  const previousBin = process.env.DENSITY_CLI_BIN;
+  const previousCalls = process.env.DENSITY_TEST_CALLS;
+  const previousEmptyMatched = process.env.DENSITY_TEST_EMPTY_MATCHED;
+  process.env.DENSITY_CLI_BIN = cli;
+  process.env.DENSITY_TEST_CALLS = calls;
+  process.env.DENSITY_TEST_EMPTY_MATCHED = '1';
+  t.after(async () => {
+    if (previousBin === undefined) delete process.env.DENSITY_CLI_BIN;
+    else process.env.DENSITY_CLI_BIN = previousBin;
+    if (previousCalls === undefined) delete process.env.DENSITY_TEST_CALLS;
+    else process.env.DENSITY_TEST_CALLS = previousCalls;
+    if (previousEmptyMatched === undefined) delete process.env.DENSITY_TEST_EMPTY_MATCHED;
+    else process.env.DENSITY_TEST_EMPTY_MATCHED = previousEmptyMatched;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await liveWayfindingStatus({
+    query: 'room for two',
+    floorId: 'floor_1',
+    includeFloorplan: true,
+  });
+  const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
+  const wayfinding = invocations.find(([command, subcommand]) => command === 'wayfinding' && subcommand === 'floorplan');
+  assert.deepEqual(wayfinding, [
+    'wayfinding', 'floorplan', '--floor', 'floor_1', '--format', 'json',
+    '--focus-space', 'fallback_room_1',
+    '--focus-space', 'fallback_room_2',
+  ]);
 });
 
 test('floorUsageReport rejects an invalid focus list before running the CLI report', async () => {
