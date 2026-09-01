@@ -86,7 +86,7 @@ test('liveWayfindingStatus resolves a building name and calls density live', asy
   const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
   assert.deepEqual(invocations.find(([command]) => command === 'live'), [
     'live', 'which conference rooms are available right now?', '--format', 'json',
-    '--building-query', 'Roxanne', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
+    '--building-query', 'Roxanne', '--live-timeout-ms', '30000', '--max-age-seconds', '30',
   ]);
   assert.equal(invocations.length, 1);
   assert.equal(invocations.some(([command]) => command === 'available-buildings'), false);
@@ -126,7 +126,7 @@ test('liveWayfindingStatus returns floor clarification without listing the portf
   const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
   assert.deepEqual(invocations.find(([command]) => command === 'live'), [
     'live', 'how many phone booths are available?', '--format', 'json',
-    '--floor-query', 'Ambiguous Floor', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
+    '--floor-query', 'Ambiguous Floor', '--live-timeout-ms', '30000', '--max-age-seconds', '30',
   ]);
   assert.equal(invocations.length, 1);
   assert.equal(invocations.some(([command]) => command === 'available-buildings'), false);
@@ -162,7 +162,7 @@ test('liveWayfindingStatus resolves a floor within a building in one CLI call', 
   const invocations = (await readFile(calls, 'utf8')).trim().split(/\r?\n/u).map(JSON.parse);
   assert.deepEqual(invocations.find(([command]) => command === 'live'), [
     'live', 'open phone booths', '--format', 'json', '--building-query', 'Roxanne',
-    '--floor-query', '3rd floor', '--live-timeout-ms', '5000', '--max-age-seconds', '30',
+    '--floor-query', '3rd floor', '--live-timeout-ms', '30000', '--max-age-seconds', '30',
   ]);
   assert.equal(invocations.length, 1);
 });
