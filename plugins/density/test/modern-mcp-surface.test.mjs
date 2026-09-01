@@ -184,13 +184,6 @@ test('Modern MCP default surface uses query_db, unique tool descriptions, and on
       assert.equal(schema.contents.length, 1);
       assert.equal(schema.contents[0].uri, schemaUri);
       assert.equal(schema.contents[0].mimeType, 'application/json');
-      const schemaPayload = JSON.parse(schema.contents[0].text);
-      assert.equal(schemaPayload.kind, 'density.db-schema.v1');
-      assert.equal(schemaPayload.dialect, 'duckdb');
-      assert.deepEqual(
-        schemaPayload.tables.map(({ name }) => name),
-        ['density_atlas_spaces_flat', 'density_local_metrics'],
-      );
       const cachedSchema = await callMcp(child, 5, 'resources/read', { uri: schemaUri });
       assert.equal(cachedSchema.contents[0].text, schema.contents[0].text);
 

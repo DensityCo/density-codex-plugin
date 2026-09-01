@@ -330,6 +330,9 @@ test('Density guidance uses the Modern MCP query route', async () => {
   assert.match(systemPrompt, /Bare "utilization" is ambiguous[\s\S]+Ask one[\s\S]+focused clarification before querying[\s\S]+daily duration threshold[\s\S]+working-hours schedule in the same question/, 'system prompt should clarify the metric and working-hours basis before querying');
   assert.match(density, /complete local calendar days[\s\S]+latest complete\s+local[\s\S]+convert its boundaries to UTC[\s\S]+filter `bucket_start` before aggregation/, 'parent skill should filter large metric histories before local-time calculation');
   assert.match(density, /canonical `local_date`, `weekday`, and `hour` fields only after the\s+`bucket_start` filter/, 'parent skill should use canonical local fields after the UTC filter');
+  assert.match(density, /every compared population uses 15-minute data[\s\S]+preserve that resolution/, 'parent skill should preserve common 15-minute comparisons');
+  assert.match(density, /mixed-resolution comparisons[\s\S]+one row per space and local\s+hour[\s\S]+hourly row when present[\s\S]+aggregate complete 15-minute\s+rows[\s\S]+Never use both resolutions for one space-hour/, 'parent skill should normalize mixed-resolution comparisons without overlap');
+  assert.match(density, /incomplete\s+space-hours missing[\s\S]+report their coverage[\s\S]+Do not average percentages without their weights/, 'parent skill should preserve incomplete hourly evidence and weighted means');
   assert.doesNotMatch(density, /round them to whole-number percentages in\s+SQL/, 'parent skill should not discard percentage precision in SQL');
   assert.match(
     density,
