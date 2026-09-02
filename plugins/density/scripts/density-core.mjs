@@ -77,6 +77,29 @@ const derivedDatasetState = async ({ dataDir, timeoutMs = 10000 }) => {
   }
 };
 
+const freshnessState = async ({ dataDir, timeoutMs = 10000 }) => {
+  const cli = await resolveDensityCli();
+  if (!cli) return { state: 'unavailable', policy: { streams: {} }, streams: [] };
+  const capabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs });
+  if (!capabilities.commands?.freshnessStatus) {
+    return { state: 'unavailable', policy: { streams: {} }, streams: [] };
+  }
+  const result = await runDensity(cli, ['freshness-status', '--format', 'json'], {
+    dataDir,
+    allowFailure: true,
+    timeoutMs,
+  });
+  if (result.code !== 0 || result.timedOut) {
+    return { state: 'unavailable', policy: { streams: {} }, streams: [] };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return { state: 'available', policy: parsed.policy, streams: parsed.streams };
+  } catch {
+    return { state: 'unavailable', policy: { streams: {} }, streams: [] };
+  }
+};
+
 // Starts one detached `density maintain local-metrics` per data directory and server process.
 const startDerivedDatasetRepair = ({ cli, capabilities, dataDir, derivedDataset }) => {
   if (!isRecord(derivedDataset) || derivedDataset.state === 'current' || derivedDataset.state === 'unknown') return undefined;
@@ -1135,7 +1158,12 @@ export async function queryDb(args = {}) {
   const declaredAnalysisContext = validateQueryAnalysis(args.analysis);
   const response = await runCapabilityJsonCommand(args, {
     capability: 'queryDb',
-    cliArgs: ['query-db', '--sql', sql, '--format', 'json'],
+    cliArgs: [
+      'query-db',
+      '--sql', sql,
+      ...(declaredAnalysisContext ? ['--analysis', JSON.stringify(declaredAnalysisContext)] : []),
+      '--format', 'json',
+    ],
     timeoutMs: QUERY_DB_DEFAULT_TIMEOUT_MS,
     measurePerformance: true,
     extraFields: { sql },
@@ -1562,11 +1590,12 @@ const uniqueParquetStorage = (storage) => {
 
 export async function status(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
-  const [state, storage, backgroundDeepSync, derivedDataset] = await Promise.all([
+  const [state, storage, backgroundDeepSync, derivedDataset, freshness] = await Promise.all([
     readStatusState(dataDir),
     storageReport(dataDir),
     latestDeepSyncStatus(dataDir),
     derivedDatasetState({ dataDir }),
+    freshnessState({ dataDir }),
   ]);
   const streams = summarizeSyncState(await readStatusSyncStreams(dataDir, state));
   const latestSyncAt = latestIso(streams.map((stream) => stream.latestSyncAt));
@@ -1616,6 +1645,7 @@ export async function status(args = {}) {
       fastQuestionsReady: storage.fastQuestionsReady,
     },
     derivedDataset,
+    freshness,
     readiness: {
       localDataReady,
       status: localDataReady ? 'ready' : 'sync_required',
@@ -1706,7 +1736,10 @@ export async function floorUsageReport(args = {}) {
 
 export async function localDataProfile(args = {}) {
   const dataDir = resolveDataDir(args.dataDir);
-  const profile = await localDataProfileReport(dataDir);
+  const [profile, streamFreshness] = await Promise.all([
+    localDataProfileReport(dataDir),
+    freshnessState({ dataDir }),
+  ]);
   const storage = profile.storage;
   const newestModifiedAt = [
     ...storage.tables.map((table) => table.modifiedAt),
@@ -1727,6 +1760,9 @@ export async function localDataProfile(args = {}) {
       requestedWindow: args.window ?? undefined,
       windowCoverage: requestedWindowCovered,
       reason: profile.reason,
+      policy: streamFreshness.policy,
+      streams: streamFreshness.streams,
+      state: streamFreshness.state,
     },
     profile,
     storage,

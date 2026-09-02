@@ -22,6 +22,11 @@ if (command === 'query') {
 }
 if (command === 'query-db') {
   const sql = args[args.indexOf('--sql') + 1] || '';
+  const analysis = args[args.indexOf('--analysis') + 1] || '';
+  if (!analysis || typeof JSON.parse(analysis) !== 'object') {
+    console.error('analysis was not forwarded to query-db');
+    process.exit(1);
+  }
   if (/\\b(drop|delete|update|insert|alter|attach|pragma)\\b/i.test(sql)) {
     console.error('read-only SQL safety rejected the statement');
     process.exit(1);

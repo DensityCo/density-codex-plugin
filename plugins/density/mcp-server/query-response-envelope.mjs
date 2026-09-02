@@ -1,5 +1,4 @@
 const PRIVATE_FIELDS = new Set([
-  'args',
   'artifact',
   'byteCount',
   'capabilities',

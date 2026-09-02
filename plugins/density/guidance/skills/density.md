@@ -70,6 +70,10 @@ Read `density://schema` before `query_db`. Use its exact customer-scoped table
 and field names. Omit `dataDir` so the host-selected customer profile remains
 authoritative.
 
+State the returned historical coverage in every answer. When `coverageGap` is
+present, state the missing days. Offer `refresh_scope` only when `nextAction` is present.
+Never use `onboard_customer` to refresh a historical window.
+
 Prefer one SELECT that returns the requested result and its necessary evidence.
 Do not use a planning query when the answer query can resolve the same facts.
 Do not convert missing evidence into zero.
