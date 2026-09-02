@@ -40,6 +40,7 @@ files, skills, or cache operations.
 
 - Use `status` when the user asks what is configured, downloaded, current, or ready. Do not call it before every analysis.
 - Use `query_db` for historical workplace questions, rankings, and trends.
+- Use `refresh_scope` only for one resolved building, floor, or space when `query_db` returns that next action. Use `refresh_status` for a running job.
 - Use `render_chart` for a presentation-only change when existing evidence fully supports it.
 - Use `configure_brand` when the user supplies brand guidelines or a logo for future charts.
 - Use `live_wayfinding_status` and the `wayfinding` skill for current availability. Pass `building` and `floor` as names. When the response has `needsInput`, call again with a suggestion `id` as `floorId`.
@@ -73,6 +74,8 @@ authoritative.
 State the returned historical coverage in every answer. When `coverageGap` is
 present, state the missing days. Offer `refresh_scope` only when `nextAction` is present.
 Never use `onboard_customer` to refresh a historical window.
+Never broaden `refresh_scope` to an organization. Keep the returned scope, streams, and window unchanged.
+Use `intraday: true` only when `DENSITY_INTRADAY_REFRESH=1` enables provisional data. Label provisional evidence in every answer and Brief.
 
 Prefer one SELECT that returns the requested result and its necessary evidence.
 Do not use a planning query when the answer query can resolve the same facts.

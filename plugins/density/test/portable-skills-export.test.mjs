@@ -95,9 +95,10 @@ test('exports an executable Claude MCP runtime closure', async () => {
     });
     const mcpConfig = JSON.parse(await readFile(path.join(outputRoot, '.mcp.json'), 'utf8'));
     const server = mcpConfig.mcpServers.density;
-    assert.equal(result.runtimeFileCount, 16);
+    assert.equal(result.runtimeFileCount, 17);
     assert.equal(await exists(path.join(outputRoot, 'mcp-server', 'agent-response-envelope.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'mcp-server', 'artifact-content.mjs')), true);
+    assert.equal(await exists(path.join(outputRoot, 'mcp-server', 'hot-scopes.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'mcp-server', 'query-response-envelope.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-background-deep-sync.mjs')), true);
     assert.equal(await exists(path.join(outputRoot, 'scripts', 'density-demo-customer.mjs')), true);

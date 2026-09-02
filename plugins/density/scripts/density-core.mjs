@@ -59,6 +59,10 @@ const derivedDatasetRepairsStarted = new Set();
 
 const unknownDerivedDataset = (reason) => ({ name: DERIVED_DATASET_NAME, state: 'unknown', reason });
 
+export const resolveIntradayRefreshEnabled = (
+  value = process.env.DENSITY_INTRADAY_REFRESH,
+) => value === '1';
+
 const derivedDatasetState = async ({ dataDir, timeoutMs = 10000 }) => {
   const cli = await resolveDensityCli();
   if (!cli) return unknownDerivedDataset('Density CLI not found.');
@@ -77,14 +81,18 @@ const derivedDatasetState = async ({ dataDir, timeoutMs = 10000 }) => {
   }
 };
 
-const freshnessState = async ({ dataDir, timeoutMs = 10000 }) => {
+const readFreshnessState = async ({ dataDir, timeoutMs = 10000, scope, scopeType }) => {
   const cli = await resolveDensityCli();
   if (!cli) return { state: 'unavailable', policy: { streams: {} }, streams: [] };
   const capabilities = await discoverCliCapabilities(cli, { dataDir, timeoutMs });
-  if (!capabilities.commands?.freshnessStatus) {
+  if (scope ? !capabilities.commands?.freshnessScope : !capabilities.commands?.freshnessStatus) {
     return { state: 'unavailable', policy: { streams: {} }, streams: [] };
   }
-  const result = await runDensity(cli, ['freshness-status', '--format', 'json'], {
+  const result = await runDensity(cli, [
+    'freshness-status',
+    ...(scope ? ['--scope', scope, '--scope-type', scopeType] : []),
+    '--format', 'json',
+  ], {
     dataDir,
     allowFailure: true,
     timeoutMs,
@@ -98,6 +106,17 @@ const freshnessState = async ({ dataDir, timeoutMs = 10000 }) => {
   } catch {
     return { state: 'unavailable', policy: { streams: {} }, streams: [] };
   }
+};
+
+export const freshnessState = async ({ dataDir, timeoutMs = 10000 }) =>
+  readFreshnessState({ dataDir, timeoutMs });
+
+export const scopeFreshnessState = async ({ dataDir, scope, scopeType, timeoutMs = 10000 }) => {
+  if (typeof scope !== 'string' || !scope) throw new Error('scope is required.');
+  if (!['building', 'floor', 'space'].includes(scopeType)) {
+    throw new Error('scopeType must be building, floor, or space.');
+  }
+  return readFreshnessState({ dataDir, scope, scopeType, timeoutMs });
 };
 
 // Starts one detached `density maintain local-metrics` per data directory and server process.
@@ -1151,6 +1170,212 @@ async function attachQueryChartPreview(response, args = {}, extraFields = {}, pa
 }
 
 export const QUERY_DB_DEFAULT_TIMEOUT_MS = 120000;
+export const DEFAULT_REFRESH_BUDGET_MS = 20000;
+export const DEFAULT_REFRESH_POLL_INTERVAL_MS = 100;
+export const DEFAULT_REFRESH_STATUS_TIMEOUT_MS = 5000;
+export const DEFAULT_REFRESH_ETA_SECONDS = 30;
+export const DEFAULT_REFRESH_MAX_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
+
+const nonNegativeIntegerSetting = (name, value, fallback) => {
+  const configured = value ?? fallback;
+  const number = Number(configured);
+  if (!Number.isInteger(number) || number < 0) throw new Error(`${name} must be a non-negative integer.`);
+  return number;
+};
+
+const positiveIntegerSetting = (name, value, fallback) => {
+  const number = nonNegativeIntegerSetting(name, value, fallback);
+  if (number < 1) throw new Error(`${name} must be a positive integer.`);
+  return number;
+};
+
+const refreshBudgetMs = (value) => {
+  const name = value === undefined ? 'DENSITY_REFRESH_BUDGET_MS' : 'budgetMs';
+  return nonNegativeIntegerSetting(name, value ?? process.env.DENSITY_REFRESH_BUDGET_MS, DEFAULT_REFRESH_BUDGET_MS);
+};
+
+const refreshPollIntervalMs = () => positiveIntegerSetting(
+  'DENSITY_REFRESH_POLL_INTERVAL_MS',
+  process.env.DENSITY_REFRESH_POLL_INTERVAL_MS,
+  DEFAULT_REFRESH_POLL_INTERVAL_MS,
+);
+
+const refreshStatusTimeoutMs = () => positiveIntegerSetting(
+  'DENSITY_REFRESH_STATUS_TIMEOUT_MS',
+  process.env.DENSITY_REFRESH_STATUS_TIMEOUT_MS,
+  DEFAULT_REFRESH_STATUS_TIMEOUT_MS,
+);
+
+const refreshMaxWindowMs = () => positiveIntegerSetting(
+  'DENSITY_REFRESH_MAX_WINDOW_MS',
+  process.env.DENSITY_REFRESH_MAX_WINDOW_MS,
+  DEFAULT_REFRESH_MAX_WINDOW_MS,
+);
+
+const validateExplicitRefreshWindow = (since, until) => {
+  if (!since && !until) return;
+  const sinceMs = since ? Date.parse(since) : undefined;
+  const untilMs = until ? Date.parse(until) : undefined;
+  if ((since && !Number.isFinite(sinceMs)) || (until && !Number.isFinite(untilMs))) {
+    throw new Error('since and until must be valid timestamps.');
+  }
+  if (sinceMs === undefined || untilMs === undefined) return;
+  if (sinceMs >= untilMs) throw new Error('since must be before until.');
+  const maxWindowMs = refreshMaxWindowMs();
+  if (untilMs - sinceMs > maxWindowMs) {
+    const days = maxWindowMs / (24 * 60 * 60 * 1000);
+    const limit = Number.isInteger(days) ? `${days} day${days === 1 ? '' : 's'}` : `${maxWindowMs} ms`;
+    throw new Error(`A scope refresh cannot request more than ${limit}.`);
+  }
+};
+
+const parseRefreshReply = (result, label) => {
+  if (result.code !== 0 || result.timedOut) {
+    throw new Error(result.timedOut ? `${label} timed out.` : oneLine(result.stderr || result.stdout));
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`${label} response was not JSON: ${error.message}`);
+  }
+};
+
+const refreshJobStatus = async ({ cli, dataDir, jobId, timeoutMs = refreshStatusTimeoutMs() }) =>
+  parseRefreshReply(await runDensity(cli, ['refresh-status', '--job', jobId, '--format', 'json'], {
+    dataDir,
+    allowFailure: true,
+    timeoutMs,
+  }), 'Scope refresh status');
+
+export async function refreshStatus(args = {}) {
+  const jobId = oneLine(args.jobId);
+  if (!jobId) throw new Error('jobId is required.');
+  const dataDir = resolveDataDir(args.dataDir);
+  const cli = await requireCli();
+  const capabilities = await discoverCliCapabilities(cli, { dataDir });
+  if (!capabilities.commands?.refreshScope) {
+    return {
+      ok: false,
+      unsupported: true,
+      error: 'This Density CLI does not support scoped refresh status.',
+      dataDir,
+      cli: safeCliInfo(cli),
+      capabilities,
+    };
+  }
+  try {
+    return await refreshJobStatus({ cli, dataDir, jobId, timeoutMs: args.timeoutMs ?? refreshStatusTimeoutMs() });
+  } catch (error) {
+    return { ok: false, jobId, error: oneLine(error.message), dataDir, cli: safeCliInfo(cli) };
+  }
+}
+
+export async function refreshScope(args = {}) {
+  const scope = oneLine(args.scope);
+  if (!scope) throw new Error('scope is required.');
+  const scopeType = oneLine(args.scopeType);
+  if (scopeType && !['building', 'floor', 'space'].includes(scopeType)) {
+    throw new Error('scopeType must be building, floor, or space. Organization refresh is not allowed.');
+  }
+  const streams = args.streams === undefined ? ['metrics'] : args.streams;
+  if (!Array.isArray(streams) || streams.length === 0
+    || streams.some((stream) => stream !== 'metrics' && stream !== 'occupancy')) {
+    throw new Error('streams must contain metrics or occupancy.');
+  }
+  if (args.intraday !== undefined && typeof args.intraday !== 'boolean') {
+    throw new Error('intraday must be a boolean.');
+  }
+  const intraday = args.intraday === true;
+  if (intraday && !resolveIntradayRefreshEnabled()) {
+    return {
+      ok: false,
+      unsupported: true,
+      error: 'Intraday refresh is disabled. Set DENSITY_INTRADAY_REFRESH=1 to enable it.',
+    };
+  }
+  const dataDir = resolveDataDir(args.dataDir);
+  const cli = await requireCli();
+  const capabilities = await discoverCliCapabilities(cli, { dataDir });
+  if (!capabilities.commands?.refreshScope) {
+    return {
+      ok: false,
+      unsupported: true,
+      error: 'This Density CLI does not support scoped refresh.',
+      dataDir,
+      cli: safeCliInfo(cli),
+      capabilities,
+    };
+  }
+  if (intraday && !capabilities.commands?.refreshIntraday) {
+    return {
+      ok: false,
+      unsupported: true,
+      error: 'This Density CLI does not support intraday scoped refresh.',
+      dataDir,
+      cli: safeCliInfo(cli),
+      capabilities,
+    };
+  }
+
+  const since = oneLine(args.since);
+  const until = oneLine(args.until);
+  validateExplicitRefreshWindow(since, until);
+
+  const resolution = parseRefreshReply(await runDensity(cli, [
+    'onboard', 'scope', scope,
+    ...(scopeType ? ['--scope-type', scopeType] : []),
+    '--format', 'json',
+  ], { dataDir, allowFailure: true, timeoutMs: 10000 }), 'Scope resolution');
+  if (resolution.ok !== true || !isRecord(resolution.scope) || typeof resolution.scope.id !== 'string') {
+    return {
+      ok: false,
+      state: 'failed',
+      error: resolution.reason === 'ambiguous' ? 'The refresh scope is ambiguous.' : 'The refresh scope was not found.',
+      suggestions: Array.isArray(resolution.suggestions) ? resolution.suggestions : [],
+    };
+  }
+
+  const jobId = `refresh-${resolution.scope.id}`;
+  const cliArgs = [
+    ...cli.args,
+    'refresh', '--scope', resolution.scope.id, '--scope-type', resolution.scope.type,
+    ...streams.flatMap((stream) => ['--stream', stream]),
+    ...(since ? ['--since', since] : []),
+    ...(until ? ['--until', until] : []),
+    ...(intraday ? ['--intraday'] : []),
+    '--format', 'json',
+  ];
+  const refreshStartedAt = Date.now();
+  const child = spawn(cli.command, cliArgs, {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, DENSITY_CLI_DATA_DIR: dataDir },
+  });
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  child.unref();
+
+  const budgetMs = args.wait === false ? 0 : refreshBudgetMs(args.budgetMs);
+  if (budgetMs === 0) return { state: 'running', jobId, etaSeconds: DEFAULT_REFRESH_ETA_SECONDS };
+  const deadline = Date.now() + budgetMs;
+  while (true) {
+    try {
+      const job = await refreshJobStatus({ cli, dataDir, jobId });
+      const jobStartedAt = Date.parse(job.startedAt);
+      if (Number.isFinite(jobStartedAt) && jobStartedAt >= refreshStartedAt && job.state !== 'running') return job;
+      if (Date.now() >= deadline) {
+        return { state: 'running', jobId, etaSeconds: Number(job.etaSeconds ?? DEFAULT_REFRESH_ETA_SECONDS) };
+      }
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        return { state: 'running', jobId, etaSeconds: DEFAULT_REFRESH_ETA_SECONDS };
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, refreshPollIntervalMs()));
+  }
+}
 
 export async function queryDb(args = {}) {
   const sql = String(args.sql || '').trim();
@@ -1998,6 +2223,11 @@ export async function liveWayfindingStatus(args = {}) {
     floorplanClarification: parsed.floorplanClarification,
     artifactRequired: artifactRequired ? 'floorplan' : undefined,
     userVisiblePrimaryActions: 0,
+    ...(floorId
+      ? { resolvedScope: { scopeId: floorId, type: 'floor' } }
+      : parsed?.query?.buildingId
+        ? { resolvedScope: { scopeId: parsed.query.buildingId, type: 'building' } }
+        : {}),
   };
   if (args.includeRaw === true) response.result = parsed;
   if (args.includeDiagnostics === true) {

@@ -74,6 +74,8 @@ Use incomplete recent data only for deliberate diagnostics; do not quietly use i
 
 Historical database answers must use `query_db` with the supplied scoped schema, never shell, raw DuckDB, scripts, or manual Parquet scans.
 When `query_db` returns `coverageGap`, state the missing days. Offer `refresh_scope` only when `nextAction` is present.
+Pass the exact building, floor, or space from `nextAction` to `refresh_scope`. Never refresh the organization.
+When a refresh is still running, use its `jobId` with `refresh_status`.
 Never use `onboard_customer` to refresh that window.
 Current availability must use `live_wayfinding_status`.
 Benchmark answers must use `benchmark_compare`.

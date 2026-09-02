@@ -10,6 +10,18 @@ import { test } from 'node:test';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverPath = path.resolve(testDir, '..', 'mcp-server', 'server.mjs');
 
+const remoteCoverage = {
+  scope: 'organization',
+  requestedScope: null,
+  buildingCount: 2,
+  coverageFrom: '2026-07-27T00:00:00.000Z',
+  coverageThrough: '2026-08-25T23:00:00.000Z',
+  rowCount: 180,
+  completenessLagHours: 24,
+  completenessCutoff: '2026-08-28T20:00:00.000Z',
+  generatedAt: '2026-08-29T20:00:00.000Z',
+};
+
 const callMcp = (child, id, method, params = {}, timeoutMs = 5000) => new Promise((resolve, reject) => {
   let stdout = '';
   let stderr = '';
@@ -34,11 +46,56 @@ const startRemote = async (requests) => {
     for await (const chunk of request) chunks.push(chunk);
     const message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     requests.push({ authorization: request.headers.authorization, message });
-    const result = message.method === 'initialize'
-      ? { protocolVersion: '2025-06-18', capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'density-remote-test', version: '1.0.0' } }
-      : message.method === 'tools/list'
-        ? { tools: [{ name: 'query_db', description: 'Remote query', inputSchema: { type: 'object' } }] }
-        : { content: [{ type: 'text', text: JSON.stringify({ source: 'remote' }) }] };
+    let result;
+    if (message.method === 'initialize') {
+      result = { protocolVersion: '2025-06-18', capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'density-remote-test', version: '1.0.0' } };
+    } else if (message.method === 'tools/list') {
+      result = { tools: [
+        { name: 'query_db', description: 'Remote query', inputSchema: { type: 'object' } },
+        { name: 'refresh_scope', description: 'Managed refresh', inputSchema: { type: 'object' } },
+        { name: 'refresh_status', description: 'Managed refresh status', inputSchema: { type: 'object' } },
+      ] };
+    } else if (message.method === 'resources/read') {
+      result = {
+        contents: [{
+          uri: 'density://schema',
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            buildingScopes: {
+              values: [{
+                id: 'building-1',
+                name: 'Building 1',
+                coverageFrom: remoteCoverage.coverageFrom,
+                coverageThrough: remoteCoverage.coverageThrough,
+              }],
+              truncated: false,
+            },
+            coverage: {
+              completenessLagHours: remoteCoverage.completenessLagHours,
+              completenessCutoff: remoteCoverage.completenessCutoff,
+              generatedAt: remoteCoverage.generatedAt,
+            },
+          }),
+        }],
+      };
+    } else if (message.params?.name === 'query_db') {
+      const payload = { source: 'remote', coverage: remoteCoverage };
+      result = {
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        structuredContent: payload,
+      };
+    } else {
+      const payload = {
+        state: 'managed',
+        by: 'hosted',
+        refreshedAt: '2026-08-29T20:00:00.000Z',
+        coverage: remoteCoverage,
+      };
+      result = {
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        structuredContent: payload,
+      };
+    }
     response.setHeader('content-type', 'application/json');
     response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
   });
@@ -76,20 +133,56 @@ test('remote source forwards the MCP session and stays fixed for the task', asyn
   });
   assert.equal(initialized.result.serverInfo.name, 'density-remote-test');
   const listed = await callMcp(child, 2, 'tools/list');
-  assert.deepEqual(listed.result.tools.map(({ name }) => name), ['query_db']);
-  const called = await callMcp(child, 3, 'tools/call', {
+  assert.deepEqual(listed.result.tools.map(({ name }) => name), [
+    'query_db',
+    'refresh_scope',
+    'refresh_status',
+  ]);
+  const schemaResponse = await callMcp(child, 3, 'resources/read', { uri: 'density://schema' });
+  const schema = JSON.parse(schemaResponse.result.contents[0].text);
+  assert.deepEqual(schema.coverage, {
+    completenessLagHours: 24,
+    completenessCutoff: '2026-08-28T20:00:00.000Z',
+    generatedAt: '2026-08-29T20:00:00.000Z',
+  });
+  assert.equal(schema.buildingScopes.values[0].coverageThrough, remoteCoverage.coverageThrough);
+  const called = await callMcp(child, 4, 'tools/call', {
     name: 'query_db',
     arguments: { sql: 'SELECT 1' },
   });
   assert.equal(JSON.parse(called.result.content[0].text).source, 'remote');
-  assert.equal(requests.length, 3);
+  assert.deepEqual(called.result.structuredContent.coverage, remoteCoverage);
+  const refreshParams = {
+    name: 'refresh_scope',
+    arguments: { scope: 'Building 1', scopeType: 'building', intraday: true },
+  };
+  const statusParams = {
+    name: 'refresh_status',
+    arguments: { jobId: 'hosted-refresh' },
+  };
+  const refreshed = await callMcp(child, 5, 'tools/call', refreshParams);
+  const refreshStatus = await callMcp(child, 6, 'tools/call', statusParams);
+  assert.deepEqual(refreshed.result.structuredContent, {
+    state: 'managed',
+    by: 'hosted',
+    refreshedAt: '2026-08-29T20:00:00.000Z',
+    coverage: remoteCoverage,
+  });
+  assert.deepEqual(refreshStatus.result.structuredContent, refreshed.result.structuredContent);
+  assert.deepEqual(JSON.parse(refreshed.result.content[0].text), refreshed.result.structuredContent);
+  assert.deepEqual(JSON.parse(refreshStatus.result.content[0].text), refreshStatus.result.structuredContent);
+  assert.equal(requests.length, 6);
   assert.equal(requests.every(({ authorization }) => authorization === 'Bearer remote-test-token'), true);
+  assert.deepEqual(requests.slice(4).map(({ message }) => message.params.name), ['refresh_scope', 'refresh_status']);
+  assert.deepEqual(requests[4].message.params, refreshParams);
+  assert.deepEqual(requests[5].message.params, statusParams);
+  await assert.rejects(readFile(path.join(dataDir, 'hot-scopes.json')), { code: 'ENOENT' });
 
   await writeFile(path.join(dataDir, 'state.json'), JSON.stringify({ dataSource: 'local' }));
   const changed = await callMcp(child, 4, 'tools/list');
   assert.equal(changed.result.isError, true);
   assert.match(changed.result.content[0].text, /fresh task/u);
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 6);
 });
 
 test('remote source rejects a client-selected local data directory', async (t) => {
