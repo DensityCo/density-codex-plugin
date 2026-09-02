@@ -16,25 +16,11 @@ const derivedDataset = {
   nextAction: { id: 'maintain_local_metrics', label: 'Rebuild the local_metrics dataset.', command: 'density maintain local-metrics --format json' },
 };
 if (args[0] === 'capabilities') {
-  console.log(JSON.stringify({
-    commands: {
-      queryDb: true,
-      maintainLocalMetrics: true,
-      freshnessStatus: process.env.DENSITY_TEST_FRESHNESS_STATUS !== '0',
-    },
-  }));
+  console.log(JSON.stringify({ commands: { queryDb: true, maintainLocalMetrics: true } }));
   process.exit(0);
 }
 if (args[0] === 'maintain') {
   console.log(JSON.stringify({ kind: 'density.maintain.local-metrics.v1', check: args.includes('--check'), before: derivedDataset, rebuilt: false, after: derivedDataset }));
-  process.exit(0);
-}
-if (args[0] === 'freshness-status') {
-  console.log(JSON.stringify({
-    kind: 'density.freshness.v1',
-    policy: { streams: { metrics: { maxAgeMs: 172800000 } } },
-    streams: [{ name: 'metrics', maxAgeMs: 172800000, observedAt: '2026-08-30T00:00:00.000Z', ageMs: 172800000, stale: false }],
-  }));
   process.exit(0);
 }
 if (args[0] === 'query-db') {
@@ -84,13 +70,9 @@ test('status and data_health_report expose the derived dataset state from the CL
   assert.equal(report.derivedDataset.name, 'local_metrics');
   assert.equal(report.derivedDataset.state, 'missing');
   assert.equal(report.derivedDataset.nextAction.command, 'density maintain local-metrics --format json');
-  assert.equal(report.freshness.streams[0].ageMs, 172800000);
-  assert.equal(report.freshness.streams[0].stale, false);
 
   const health = await dataHealthReport({ dataDir });
   assert.equal(health.derivedDataset.state, 'missing');
-  assert.equal(health.freshness.streams[0].ageMs, 172800000);
-  assert.equal(health.freshness.streams[0].stale, false);
   assert.deepEqual(health.checks.find((check) => check.name === 'derived local_metrics dataset current'), {
     name: 'derived local_metrics dataset current',
     ok: false,
@@ -127,16 +109,4 @@ test('DENSITY_DISABLE_BACKGROUND_REFRESH skips the repair', async (t) => {
     reason: 'DENSITY_DISABLE_BACKGROUND_REFRESH=1 disables the background repair.',
   });
   assert.equal((await commands()).some((args) => args[0] === 'maintain'), false);
-});
-
-test('an older runtime does not receive the freshness-status command', async (t) => {
-  const { dataDir, commands } = await withFakeCli(t, { DENSITY_TEST_FRESHNESS_STATUS: '0' });
-
-  const report = await status({ dataDir });
-  assert.deepEqual(report.freshness, {
-    state: 'unavailable',
-    policy: { streams: {} },
-    streams: [],
-  });
-  assert.equal((await commands()).some(([command]) => command === 'freshness-status'), false);
 });

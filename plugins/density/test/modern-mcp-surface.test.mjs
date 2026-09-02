@@ -105,9 +105,6 @@ test('Modern MCP default surface uses query_db, unique tool descriptions, and on
       assert.match(queryTool.description, /Treat a timeout or error as failure, not empty data/);
       assert.match(queryTool.description, /Use the returned evidence ID with render_chart/i);
       assert.match(queryTool.description, /Omit analysis\.window unless the user supplied explicit ISO dates/);
-      assert.match(queryTool.description, /State the returned coverage in every answer/);
-      assert.match(queryTool.description, /Offer refresh_scope only when nextAction is present/);
-      assert.match(queryTool.description, /Never use onboard_customer to refresh a historical window/);
       assert.equal(queryTool.inputSchema.properties.chart, undefined);
       const renderTool = listed.tools.find(({ name }) => name === 'render_chart');
       assert.ok(renderTool, 'render_chart should be model-visible');
@@ -240,7 +237,7 @@ test('Modern MCP status reports safe local identity, sync, storage, and readines
       },
     }));
 
-    await withServer({ DENSITY_CLI_BIN: cliBinPath }, async (child) => {
+    await withServer({}, async (child) => {
       await callMcp(child, 1, 'initialize', {
         protocolVersion: '2025-06-18',
         capabilities: {},
@@ -265,19 +262,6 @@ test('Modern MCP status reports safe local identity, sync, storage, and readines
         latestSyncAt: '2026-08-26T20:00:00.000Z',
         coverageThrough: '2026-08-25T00:00:00.000Z',
       }]);
-      assert.equal(status.freshness.state, 'available');
-      assert.deepEqual(status.freshness.policy.streams, {
-        spaces: { maxAgeMs: 86_400_000 },
-        floorplans: { maxAgeMs: 604_800_000 },
-        metrics: { maxAgeMs: 172_800_000 },
-        occupancy: { maxAgeMs: 3_600_000 },
-      });
-      assert.deepEqual(status.freshness.streams.map(({ name, stale }) => ({ name, stale })), [
-        { name: 'spaces', stale: true },
-        { name: 'floorplans', stale: true },
-        { name: 'metrics', stale: true },
-        { name: 'occupancy', stale: true },
-      ]);
       assert.equal(status.storage.parquetFiles, 10);
       assert.equal(status.storage.parquetBytes, 121);
       assert.equal(status.readiness.status, 'ready');
@@ -294,7 +278,7 @@ test('Modern MCP status reports safe local identity, sync, storage, and readines
 test('Modern MCP status recommends sync for an empty local profile', async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'density-empty-status-'));
   try {
-    await withServer({ DENSITY_CLI_BIN: cliBinPath }, async (child) => {
+    await withServer({}, async (child) => {
       await callMcp(child, 1, 'initialize', {
         protocolVersion: '2025-06-18',
         capabilities: {},

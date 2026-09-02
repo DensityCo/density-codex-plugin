@@ -23,7 +23,6 @@ const runtimeFiles = [
   'guidance/density-system-prompt.md',
   'mcp-server/agent-response-envelope.mjs',
   'mcp-server/artifact-content.mjs',
-  'mcp-server/hot-scopes.mjs',
   'mcp-server/query-response-envelope.mjs',
   'mcp-server/server.mjs',
   'mcp-server/state-file.mjs',

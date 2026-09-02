@@ -22,14 +22,10 @@ import {
   onboardingStatus,
   prepareFloorplans,
   queryDb,
-  refreshScope,
-  refreshStatus,
   renderChart,
-  resolveIntradayRefreshEnabled,
   resolveDataDir,
   sensorHealthReport,
   setup,
-  scopeFreshnessState,
   status,
 } from '../scripts/density-core.mjs';
 import { localHtmlResourceLinks } from './artifact-content.mjs';
@@ -40,7 +36,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { standardizeAgentResponse } from './agent-response-envelope.mjs';
 import { publicQueryResponse, queryResponseDiagnostics } from './query-response-envelope.mjs';
-import { createHotScopeManager } from './hot-scopes.mjs';
 
 const chartDeclarationInputSchema = {
   type: 'object',
@@ -250,7 +245,7 @@ const tools = [
     },
     additionalProperties: false,
   }, localWriteTool),
-  tool('query_db', 'Use for historical workplace questions. Read density://schema directly once per question. Do not list tools or resources first, and do not reread a successful schema response. Omit dataDir so the host-selected customer profile remains authoritative. Prefer one sufficient SELECT that returns the result and its supporting evidence. Use only customer-scoped density_* tables. Do not convert missing measures to zero. State the returned coverage in every answer. When coverageGap is present, state the missing days. Offer refresh_scope only when nextAction is present. Never use onboard_customer to refresh a historical window. The analysis object records declared provenance only; it does not prove SQL intent. If an aggregate returns zero matching counts or only null measures, report no matching evidence rather than zero use or supply. Treat a timeout or error as failure, not empty data. Use the returned evidence ID with render_chart when the user requests a chart. Omit analysis.window unless the user supplied explicit ISO dates. Do not use writes, PRAGMA, COPY, ATTACH, file reads, raw tables, or internal tables.', {
+  tool('query_db', 'Use for historical workplace questions. Read density://schema directly once per question. Do not list tools or resources first, and do not reread a successful schema response. Omit dataDir so the host-selected customer profile remains authoritative. Prefer one sufficient SELECT that returns the result and its supporting evidence. Use only customer-scoped density_* tables. Do not convert missing measures to zero. The analysis object records declared provenance only; it does not prove SQL intent. If an aggregate returns zero matching counts or only null measures, report no matching evidence rather than zero use or supply. Treat a timeout or error as failure, not empty data. Use the returned evidence ID with render_chart when the user requests a chart. Omit analysis.window unless the user supplied explicit ISO dates. Do not use writes, PRAGMA, COPY, ATTACH, file reads, raw tables, or internal tables.', {
     type: 'object',
     properties: {
       sql: { type: 'string', description: 'DuckDB SELECT using only the customer-scoped density_* tables described by the Density schema resource.' },
@@ -292,34 +287,6 @@ const tools = [
       timeoutMs: { type: 'number', minimum: 1, maximum: 120000 },
     },
     required: ['evidenceId', 'chart'],
-    additionalProperties: false,
-  }, localReadOnlyTool),
-  tool('refresh_scope', 'Refresh one resolved building, floor, or space. This never refreshes an organization.', {
-    type: 'object',
-    properties: {
-      scope: { type: 'string', minLength: 1 },
-      scopeType: { type: 'string', enum: ['building', 'floor', 'space'] },
-      streams: {
-        type: 'array',
-        minItems: 1,
-        uniqueItems: true,
-        items: { type: 'string', enum: ['metrics', 'occupancy'] },
-      },
-      since: { type: 'string', minLength: 1 },
-      until: { type: 'string', minLength: 1 },
-      intraday: { type: 'boolean', description: 'Include provisional buckets for this scope. This requires DENSITY_INTRADAY_REFRESH=1.' },
-      budgetMs: { type: 'integer', minimum: 0 },
-      wait: { type: 'boolean' },
-    },
-    required: ['scope'],
-    additionalProperties: false,
-  }, remoteWriteTool),
-  tool('refresh_status', 'Report the state of one scoped refresh job.', {
-    type: 'object',
-    properties: {
-      jobId: { type: 'string', minLength: 1 },
-    },
-    required: ['jobId'],
     additionalProperties: false,
   }, localReadOnlyTool),
   tool('configure_brand', 'Apply a customer brand to future charts. Use a local guideline file or an HTTP(S) URL. Density extracts one safe chart accent and one logo. Typography and layout rules remain unchanged.', {
@@ -469,52 +436,6 @@ let toolQueue = Promise.resolve();
 let negotiatedProtocolVersion = '2025-06-18';
 let sessionDemoBinding;
 let sessionSourceBinding;
-let hotScopeManager;
-
-const backgroundRefreshStatus = () => hotScopeManager?.status() ?? { lastRunAt: null, scopes: [] };
-
-const startHotScopeManager = (dataDir) => {
-  if (hotScopeManager) return;
-  hotScopeManager = createHotScopeManager({
-    dataDir,
-    freshness: (scope) => scopeFreshnessState({
-      dataDir,
-      scope: scope.scopeId,
-      scopeType: scope.type,
-    }),
-    refreshScope: (args) => refreshScope({ ...args, dataDir }),
-    intradayEnabled: resolveIntradayRefreshEnabled,
-  });
-  void hotScopeManager.start().catch(() => undefined);
-};
-
-const recordHotScope = async (scope) => {
-  if (!hotScopeManager || !scope) return;
-  try {
-    await hotScopeManager.record(scope);
-  } catch {
-    // Hot-scope bookkeeping must not replace a successful Density answer.
-  }
-};
-
-const withBackgroundRefresh = (value) => ({ ...value, backgroundRefresh: backgroundRefreshStatus() });
-
-const withBackgroundRefreshHealth = (value) => {
-  const backgroundRefresh = backgroundRefreshStatus();
-  const failures = backgroundRefresh.scopes.filter((scope) => scope.state === 'failed').length;
-  return {
-    ...value,
-    backgroundRefresh,
-    checks: [
-      ...(Array.isArray(value?.checks) ? value.checks : []),
-      {
-        name: 'hot scope background refresh',
-        ok: failures === 0,
-        detail: `${backgroundRefresh.scopes.length} hot scopes checked; ${failures} failed.`,
-      },
-    ],
-  };
-};
 
 async function configuredDataSource(dataDir) {
   try {
@@ -619,7 +540,6 @@ async function handleRawMessage(raw) {
       return;
     }
     if (message.method === 'initialize') {
-      startHotScopeManager(resolveDataDir());
       negotiatedProtocolVersion = message.params?.protocolVersion || '2025-06-18';
       sendResult(message.id, {
         protocolVersion: negotiatedProtocolVersion,
@@ -807,17 +727,13 @@ async function callToolUnchecked(name, args, demoEnabled) {
     case 'prepare_floorplans':
       return jsonTool(await prepareFloorplans(args));
     case 'status':
-      return structuredJsonTool(withBackgroundRefresh(await status(args)));
+      return structuredJsonTool(await status(args));
     case 'historical_export':
       return jsonTool(await historicalExport(args));
     case 'create_demo_customer':
       return jsonTool(await createDemoCustomer(args));
     case 'query_db': {
       const value = await queryDb(args);
-      if (!demoEnabled && value?.ok === true) await recordHotScope(value.result?.resolvedScope && {
-        scopeId: value.result.resolvedScope.id,
-        type: value.result.resolvedScope.type,
-      });
       return demoEnabled && demoPayloadFailed(value)
         ? demoToolError('Demo mode could not complete this request.')
         : queryDbTool(value, demoEnabled, true);
@@ -828,10 +744,6 @@ async function callToolUnchecked(name, args, demoEnabled) {
         ? demoToolError('Demo mode could not complete this request.')
         : queryDbTool(value, demoEnabled);
     }
-    case 'refresh_scope':
-      return jsonTool(await refreshScope(args));
-    case 'refresh_status':
-      return jsonTool(await refreshStatus(args));
     case 'configure_brand':
       return jsonTool(await configureBrand(args));
     case 'floor_usage_report':
@@ -841,12 +753,9 @@ async function callToolUnchecked(name, args, demoEnabled) {
     case 'available_buildings':
       return jsonTool(await availableBuildings(args));
     case 'data_health_report':
-      return jsonTool(withBackgroundRefreshHealth(await dataHealthReport(args)));
-    case 'live_wayfinding_status': {
-      const value = await liveWayfindingStatus(args);
-      if (value?.ok === true) await recordHotScope(value.resolvedScope);
-      return jsonTool(value);
-    }
+      return jsonTool(await dataHealthReport(args));
+    case 'live_wayfinding_status':
+      return jsonTool(await liveWayfindingStatus(args));
     case 'benchmark_compare':
       return jsonTool(await benchmarkCompare(args));
     case 'sensor_health_report': {

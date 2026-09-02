@@ -31,31 +31,6 @@ test('the public query response keeps evidence and removes execution mechanics',
         sqlBounded: false,
       },
       performance: { duckDbExecutionMs: 20 },
-      coverage: {
-        scope: 'building',
-        requestedScope: 'Metro Tower',
-        buildingCount: 1,
-        coverageFrom: '2026-08-01T00:00:00.000Z',
-        coverageThrough: '2026-08-28T23:00:00.000Z',
-        rowCount: 720,
-        completenessLagHours: 24,
-        generatedAt: '2026-09-01T12:00:00.000Z',
-      },
-      coverageGap: {
-        requestedThrough: '2026-08-31',
-        coveredThrough: '2026-08-28T23:00:00.000Z',
-        missingDays: 3,
-      },
-      nextAction: {
-        id: 'refresh_scope',
-        tool: 'refresh_scope',
-        args: {
-          scope: 'Metro Tower',
-          scopeType: 'building',
-          since: '2026-08-28T23:00:00.000Z',
-          until: '2026-08-31',
-        },
-      },
     },
     declaredAnalysisContext: {
       scope: 'Metro Tower',
@@ -72,9 +47,6 @@ test('the public query response keeps evidence and removes execution mechanics',
   assert.equal(response.result.evidence.complete, undefined);
   assert.equal(response.result.evidence.displayedSubset, undefined);
   assert.deepEqual(response.declaredAnalysisContext, value.declaredAnalysisContext);
-  assert.deepEqual(response.result.coverage, value.result.coverage);
-  assert.deepEqual(response.result.coverageGap, value.result.coverageGap);
-  assert.deepEqual(response.result.nextAction, value.result.nextAction);
   const serialized = JSON.stringify(response);
   assert.doesNotMatch(serialized, /private|DuckDB|executedSql|sqlBounded|sha256|byteCount|dataDir|organizationId|performance|SELECT/);
 });

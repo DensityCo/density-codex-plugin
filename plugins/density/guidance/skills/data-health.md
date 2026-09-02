@@ -44,7 +44,6 @@ Prefer the plugin MCP tools when available:
 If a tool returns a validation error, make at most one repair using the exact returned error.
 Do not retry blindly or switch to another route.
 Distinguish no matching rows, incomplete coverage, and an unsupported metric in the diagnosis.
-Report the age and stale flag for each stream in the returned freshness block.
 
 ## Diagnosis Checklist
 
@@ -73,10 +72,6 @@ Prefer deterministic recovery: retry with the same cursor first, and rebuild onl
 Use incomplete recent data only for deliberate diagnostics; do not quietly use it for normal utilization answers.
 
 Historical database answers must use `query_db` with the supplied scoped schema, never shell, raw DuckDB, scripts, or manual Parquet scans.
-When `query_db` returns `coverageGap`, state the missing days. Offer `refresh_scope` only when `nextAction` is present.
-Pass the exact building, floor, or space from `nextAction` to `refresh_scope`. Never refresh the organization.
-When a refresh is still running, use its `jobId` with `refresh_status`.
-Never use `onboard_customer` to refresh that window.
 Current availability must use `live_wayfinding_status`.
 Benchmark answers must use `benchmark_compare`.
 Keep onboarding background sync distinct from user-requested analysis.

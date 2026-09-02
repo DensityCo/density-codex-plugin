@@ -35,8 +35,6 @@ const EXPECTED_MCP_TOOLS = [
   'historical_export',
   'create_demo_customer',
   'query_db',
-  'refresh_scope',
-  'refresh_status',
   'configure_brand',
   'floor_usage_report',
   'local_data_profile',
