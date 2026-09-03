@@ -146,12 +146,11 @@ and disclose the fallback.
 
 Keep the full query result available. A chart may show a disclosed subset for
 legibility, but that subset must not become a hidden data limit. Do not add
-silent caps, thresholds, or automatic rewrites that restrict a valid request.
-When one ranked chart would be hard to read, use `chart.display.top` to choose
-a readable first chart. When the user does not request a displayed count, show
-at most 15 rows in a bar chart. Do not shorten the SQL result. The renderer
-states the displayed and total row counts. Offer the remaining rows or slides.
-Do not use a fixed query row limit.
+silent thresholds or query rewrites that restrict a valid request. A bar chart
+shows at most 20 rows. Do not shorten the SQL result. The renderer states the
+displayed and total row counts. When more rows remain, state how many spaces
+are not shown. Ask whether the user wants a chart of the remaining spaces. Do
+not use a fixed query row limit.
 
 Use only returned evidence. Do not invent causes, recommendations, capacity,
 people, lifecycle history, live conditions, sensor health, or missing values.

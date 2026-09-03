@@ -86,7 +86,7 @@ Use this file as the single visual contract for Density plugin artifacts. If a u
 - Use local timezone projections from Atlas-style views for hour, weekday, heatmap, and working-hours displays.
 - Never label a UTC-grouped chart as local business-hour analysis.
 - Keep ranked bars readable. Use a disclosed subset or additional slides when one chart cannot show every returned row clearly.
-- State the displayed and total row counts. Offer the remaining rows or slides.
+- State the displayed and total row counts. Ask whether the user wants a chart of the remaining spaces.
 - Use gray for no data, a separate neutral for zero observed use, and an explicit caveat for low uptime or unhealthy signals.
 - For saturation/runout visuals, write the threshold in the subtitle or legend.
 

@@ -112,10 +112,10 @@ returned fields to evidence roles and may recommend a faithful response form.
 For a weekday-hour heatmap, declare weekday as `entity`, local hour as `time`,
 and the percentage as `measure`. Do not use `series` for this single heatmap.
 
-Keep ranked charts legible. When the user does not request a displayed count,
-use `chart.display.top` to show at most 15 rows in a bar chart. Do not shorten
-the SQL result. The renderer states the displayed and total row counts. Offer
-the remaining rows or slides. Do not use a silent or fixed query row limit.
+Keep ranked charts legible. A bar chart shows at most 20 rows. Do not shorten
+the SQL result. The renderer states the displayed and total row counts. When
+more rows remain, state how many spaces are not shown. Ask whether the user
+wants a chart of the remaining spaces. Do not use a silent or fixed query row limit.
 
 Before calling `render_chart`, use model judgment to choose a supported Brief
 body. When a clear request names an exact visualization that does not fit the

@@ -142,7 +142,7 @@ test('Density design contract makes the fixed slide default and preserves Broads
   assert.match(design, /Benchmark gold is benchmark-only/, 'design contract should reserve benchmark gold for benchmark context');
   assert.match(design, /source, freshness, and caveats visible at thumbnail size/, 'design contract should preserve trust context in thumbnails');
   assert.match(design, /displayed and total row counts/, 'design contract should disclose ranked subsets');
-  assert.match(design, /Offer the remaining rows or slides/, 'design contract should offer omitted ranked results');
+  assert.match(design, /chart of the remaining spaces/, 'design contract should offer omitted ranked results');
   assert.match(design, /^## Governed Themes$/m, 'design contract should authorize the governed theme registry');
   assert.match(design, /ten named registry themes/, 'design contract should enumerate the named theme family');
   assert.doesNotMatch(design, /institutional/, 'design contract must not list the retired theme');
@@ -175,11 +175,11 @@ test('Density system prompt preserves the Modern MCP UX contract', async () => {
   assert.match(prompt, /Preserve an explicit user\s+interval/);
   assert.match(prompt, /Keep the full query result available/);
   assert.match(prompt, /displayed and total row counts/);
-  assert.match(prompt, /offer\s+the remaining rows or slides/i);
-  assert.match(prompt, /Do not use a fixed query row limit/);
+  assert.match(prompt, /state how many spaces\s+are not shown[\s\S]+chart of the remaining spaces/i);
+  assert.match(prompt, /Do\s+not use a fixed query row limit/);
   assert.match(prompt, /Plot exact returned values/);
   assert.match(prompt, /Presentation-only edits reuse evidence/);
-  assert.match(prompt, /Do not add\s+silent caps, thresholds, or automatic rewrites/);
+  assert.match(prompt, /Do not add\s+silent thresholds or query rewrites/);
   assert.match(prompt, /required evidence is unavailable[\s\S]+state the\s+closest truthful result or next useful option/);
 });
 
@@ -305,9 +305,9 @@ test('Density guidance uses the Modern MCP query route', async () => {
   assert.match(density, /Read the schema once/, 'parent skill should prevent repeated schema reads');
   assert.match(density, /Do not read the fallback\s+prompt file during a normal Codex turn/, 'parent skill should prevent redundant prompt reads');
   assert.match(density, /displayed and\s+total row counts/, 'parent skill should disclose ranked subsets');
-  assert.match(density, /offer\s+the remaining rows or slides/i, 'parent skill should offer omitted ranked results');
+  assert.match(density, /state how many spaces are not shown[\s\S]+chart of the remaining spaces/i, 'parent skill should offer omitted ranked results');
   assert.match(density, /Do not use a silent or\s+fixed query row limit/, 'parent skill should preserve the complete query result');
-  assert.match(density, /user does not request a displayed count[\s\S]+at most 15 rows/, 'parent skill should keep default ranked bars inside the Brief design');
+  assert.match(density, /bar chart shows at most 20 rows/, 'parent skill should keep ranked bars inside the Brief design');
   for (const text of [density, systemPrompt]) {
     assert.match(text, /Preserve the (?:user's explicit|requested) scope,[\s\S]+(?:period|window)[\s\S]+population[\s\S]+denominator[\s\S]+aggregation[\s\S]+timezone/, 'guidance should preserve every material evidence dimension');
     assert.match(text, /unrounded values for/i, 'guidance should use raw values for semantic decisions');
