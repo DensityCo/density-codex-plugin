@@ -1,6 +1,6 @@
 {
   "name": "density",
-  "version": "0.2.57",
+  "version": "0.2.58",
   "description": "Local-first Density workplace analytics, building lifecycle readiness, floorplans, wayfinding, benchmarking, sensor health, and visual reports.",
   "author": {
     "name": "Density"
@@ -17,7 +17,7 @@
   ],
   "managedCli": {
     "enabled": true,
-    "version": "0.3.41",
+    "version": "0.3.42",
     "requiredCapabilities": {
       "commands": [
         "availableBuildings",
@@ -30,8 +30,8 @@
     },
     "assets": {
       "darwin-arm64": {
-        "url": "https://github.com/DensityCo/density-codex-plugin/releases/download/density-mcp-runtime-v0.3.41/density-mcp-v0.3.41-darwin-arm64.tar.gz",
-        "sha256": "a0259601277fafbdd215ee436c344cdb6cb1ae9d2eca9b45f089de18c54dcd85"
+        "url": "https://github.com/DensityCo/density-codex-plugin/releases/download/density-mcp-runtime-v0.3.42/density-mcp-v0.3.42-darwin-arm64.tar.gz",
+        "sha256": "862787ebc17ef9d379ab98dcb844d806536ffa5f10be0762d7e4cb1c2b6e534d"
       }
     }
   },
