@@ -1,14 +1,13 @@
 ---
 name: density
-description: Use Density for workplace questions, setup, historical analysis, floorplans, live wayfinding, benchmarks, and data or sensor health.
+description: Answer historical workplace questions with the hosted Density MCP, render charts, and compare supplied data or planning scenarios.
 ---
 
 # Density
 
-Use this skill to activate the Density plugin and select the correct data mode.
-This skill supplies the shared instructions in Codex. Do not read the fallback
-prompt file during a normal Codex turn. Other MCP clients can load the canonical
-`density` prompt from `../../guidance/density-system-prompt.md`.
+Use the authenticated Density MCP at `https://mcp.density.io`.
+The server supplies authorized data and runs the queries.
+Users do not need a local CLI, local datasets, or manual synchronization.
 
 ## Analyst Voice
 
@@ -36,40 +35,34 @@ rendering. Do not render a chart until the user resolves the material ambiguity.
 Describe the workplace question being checked. Do not describe tools, SQL,
 files, skills, or cache operations.
 
-## Routes
+## Supported operations
 
-- Use `status` when the user asks what is configured, downloaded, current, or ready. Do not call it before every analysis.
 - Use `query_db` for historical workplace questions, rankings, and trends.
-- Use `render_chart` for a presentation-only change when existing evidence fully supports it.
-- Use `configure_brand` when the user supplies brand guidelines or a logo for future charts.
-- Use `live_wayfinding_status` and the `wayfinding` skill for current availability. Pass `building` and `floor` as names. When the response has `needsInput`, call again with a suggestion `id` as `floorId`.
-- Use `benchmark_compare` and the `benchmarking` skill for approved benchmark context.
-- Use `floor_usage_report` and the `floorplan` skill for spatial artifacts.
-- Use the `setup` skill for installation, authentication, onboarding, and recent-first 30-day preparation.
-- Use the `data-health` skill for missing, stale, zero, or inconsistent local data.
-- Use the `sensor-health` skill for current cloud sensor status and historical sensor uptime.
+- Use `render_chart` to present returned query evidence.
+- Use `compare_dataset` for supplied companion data or an explicit planning scenario.
+- Read `references/companion-datasets.md` before preparing a comparison.
+- Use the `setup` skill for connection and authentication problems.
 
-Use `available_buildings` for lifecycle questions, portfolio scope selection,
-or diagnosis after missing historical evidence. Do not use `available_buildings`
-to resolve a live floor or building request. The scoped live tool returns the
-relevant suggestions. Current status must not remove spaces with valid
-historical rows.
+This server does not provide live availability, floorplans, sensor health, or a benchmark lookup.
+Do not substitute historical occupancy for current availability or sensor status.
+Explain the capability limit when the user requests an unavailable operation.
 
 ## Historical queries
 
 Do not search or inspect the global tool inventory for a normal historical
-question. Call `read_mcp_resource({ server: "density", uri: "density://schema" })`
-directly. Then call `mcp__density__query_db` with the analysis and SQL. If the
-user requests a chart, call `mcp__density__render_chart` with the returned
-evidence ID and the chart declaration.
+question. Read `density://schema` directly through the connected Density MCP resource reader.
+Then call its `query_db` tool with the analysis and SQL.
+If the user requests a chart, call `render_chart` with the returned evidence ID and chart declaration. For companion data or a scenario, use `compare_dataset` with that evidence ID.
 
 Read the schema once per historical question. Do not list tools or resources
 first. After a successful read, do not read the schema again for that question.
 
 Read `density://schema` before `query_db`. Use its exact customer-scoped table
-and field names. Omit `dataDir` so the host-selected customer profile remains
-authoritative.
+and field names. The server selects the authorized customer.
+Do not supply a local path or override the organization to obtain data.
 
+Omit `analysis.window` unless the user supplies explicit ISO dates.
+Otherwise, return the actual window boundaries as evidence aliases.
 Prefer one SELECT that returns the requested result and its necessary evidence.
 Do not use a planning query when the answer query can resolve the same facts.
 Do not convert missing evidence into zero.
@@ -117,6 +110,7 @@ the SQL result. The renderer states the displayed and total row counts. When
 more rows remain, state how many spaces are not shown. Ask whether the user
 wants a chart of the remaining spaces. Do not use a silent or fixed query row limit.
 
+For chart declarations, read `references/slide-orchestration.md` when the column roles need clarification.
 Before calling `render_chart`, use model judgment to choose a supported Brief
 body. When a clear request names an exact visualization that does not fit the
 Brief grammar, answer the question and automatically render the nearest
@@ -126,18 +120,33 @@ Do not create a chart fallback cascade. Never use the previous renderer.
 If `render_chart` rejects the deliberate Brief declaration, stop and state the
 representation limit. Do not retry another body.
 
-When one chart cannot faithfully combine different units, populations,
+For Density-only presentations, when one chart cannot faithfully combine different units, populations,
 periods, timezones, denominators, or aggregations, render separate supported
 Brief charts. Label each chart for the evidence it shows. Do not imply that
 related context directly answers a different question. If no truthful,
 relevant visualization exists, state the evidence limit and do not render one.
 
-`query_db` returns an evidence ID. For each chart you render, use that ID with
-`render_chart`. Run a new query only when the requested meaning or evidence
-changes.
+`query_db` returns an evidence ID. Reuse it with `render_chart` for Density-only charts or `compare_dataset` for companion charts.
+Run a new query only when the required Density meaning or evidence changes.
 
 ## Data boundaries
 
-Keep customer historical data, current live data, approved benchmark context,
-and cloud sensor health separate. Label each source when an answer combines
-compatible modes.
+Keep measured Density evidence separate from supplied comparisons and planning assumptions.
+Use only authorized customer-scoped tables from the returned schema.
+Do not query raw tables, internal tables, files, or external URLs.
+Use read-only SELECT statements. Do not use writes, PRAGMA, COPY, or ATTACH.
+
+A timeout or error is a failed request, not evidence of zero occupancy.
+If counts are zero or measures are null, report no matching evidence.
+If the server returns `dataset_pending`, explain that the authorized dataset is still preparing.
+Do not start a local download or claim the data is ready.
+For an authentication failure, ask the user to reconnect and sign in before retrying.
+Do not ask for tokens or server credentials.
+
+Companion data can come from a CSV, Excel workbook, PDF, API, or user statement.
+Use the host's file or connector tools to extract the actual source values.
+The model selects the fields, maps the spaces, and declares the calculation.
+Density validates those declarations and calculates the comparison; it does not classify intent from prompt words.
+Keep the original source reference and explain uncertain extraction before comparing it.
+Use adjacent charts by default. Combine compatible quantities when that makes the answer clearer.
+The hosted comparison processes selected companion values temporarily. The returned chart can remain in the conversation or an export.

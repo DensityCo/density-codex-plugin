@@ -7,6 +7,9 @@ Preserve the requested scope, window, population, metric, denominator, and timez
 Use the returned evidence ID with `render_chart` to render those same rows.
 The chart declaration is a downstream presentation request.
 It does not change the query or select a database table.
+For companion data or explicit scenarios, use `compare_dataset` with the same evidence ID.
+Read `companion-datasets.md` to prepare supplied values and source references.
+The comparison operation calculates derived evidence before the shared renderer draws it.
 The declaration may include a preferred body from the expanded chart vocabulary.
 Use an optional `time` field, an optional `entity` field for time series, at most one `series` field only with `time`, and one or more numeric `measure` fields.
 Use `bin`, `low`, and `high` together for a histogram.
@@ -16,7 +19,9 @@ For a weekday-hour heatmap, declare weekday as `entity`, local hour as `time`, a
 The direct-query renderer has verified projections for bars, line, heatmap,
 histogram, tiles, table, stacked bars, scatter, slope, range, area, pie, and
 donut results.
-When a requested body is incompatible or unavailable, return the explicit warning and suggest a supported alternative.
+Choose the nearest truthful supported chart for a clear request.
+If the renderer rejects that declaration, preserve the evidence and explain the representation limit.
+Do not retry other chart bodies.
 
 Chart requests use the governed fixed slide renderer and preserve the same 1920×1080 artifact in the inline preview and downloaded output.
 Do not invent or claim a chart body that the renderer did not produce.

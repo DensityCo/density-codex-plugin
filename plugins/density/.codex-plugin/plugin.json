@@ -1,59 +1,36 @@
 {
   "name": "density",
-  "version": "0.2.58",
-  "description": "Local-first Density workplace analytics, building lifecycle readiness, floorplans, wayfinding, benchmarking, sensor health, and visual reports.",
+  "version": "0.2.59",
+  "description": "Density workplace analytics through the hosted MCP. Sign in to query authorized data and create evidence-backed charts.",
   "author": {
     "name": "Density"
   },
-  "website": "https://density.io/",
   "homepage": "https://density.io/",
   "license": "MIT",
   "keywords": [
     "density",
     "analytics",
-    "duckdb",
-    "parquet",
+    "workplace",
+    "occupancy",
     "charts"
   ],
-  "managedCli": {
-    "enabled": true,
-    "version": "0.3.42",
-    "requiredCapabilities": {
-      "commands": [
-        "availableBuildings",
-        "dataSource",
-        "demoMode",
-        "getDbSchema",
-        "queryDb",
-        "renderChart"
-      ]
-    },
-    "assets": {
-      "darwin-arm64": {
-        "url": "https://github.com/DensityCo/density-codex-plugin/releases/download/density-mcp-runtime-v0.3.42/density-mcp-v0.3.42-darwin-arm64.tar.gz",
-        "sha256": "862787ebc17ef9d379ab98dcb844d806536ffa5f10be0762d7e4cb1c2b6e534d"
-      }
-    }
-  },
   "skills": "./skills/",
   "interface": {
     "displayName": "Density",
-    "shortDescription": "Activate local Density data, then add live and benchmark context.",
-    "longDescription": "Density helps Codex install or find the Density CLI, verify local Parquet-first storage, check building status/go-live readiness before analysis, prepare customer data, answer historical utilization questions from local DuckDB/Parquet, render floorplan and chart artifacts with one shared design contract, use the live feed for current wayfinding, and keep benchmark-network context display-safe and separate from customer-owned local data.",
+    "shortDescription": "Sign in to analyze workplace data and create charts.",
+    "longDescription": "Density connects Codex to the hosted Density MCP. Sign in to query authorized workplace data, compare available datasets, and create charts from query evidence. The plugin requires no local CLI or local dataset.",
     "developerName": "Density",
     "category": "Productivity",
     "capabilities": [
       "Read",
-      "Write",
       "Interactive"
     ],
     "defaultPrompt": [
-      "Set up Density and ask my first local question",
-      "Ask Density what rooms are busiest from local data",
-      "Diagnose whether my local Density data is trustworthy"
+      "Connect Density and check which data I can access",
+      "Analyze occupancy for my building",
+      "Create a chart from my Density query"
     ],
     "brandColor": "#8C2F1D",
-    "website": "https://density.io/",
     "composerIcon": "./assets/density-icon.png",
     "logo": "./assets/density-icon.png"
   },

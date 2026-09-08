@@ -1,6 +1,6 @@
 interface:
   display_name: "Density"
-  short_description: "Answer Density questions with local, live, benchmark, setup, and health tools."
-  default_prompt: "Use $density for Density questions. For historical analysis, read density://schema directly once, then use query_db with the supplied schema and chart context. Do not list tools or resources first. Use local_data_profile or data_health_report for local freshness, live_wayfinding_status for current availability, and benchmark_compare for approved comparisons."
+  short_description: "Analyze workplace history with the hosted Density MCP."
+  default_prompt: "Use $density to answer my workplace question with the hosted Density MCP. Read density://schema once, query authorized evidence, and render a chart when requested."
 policy:
   allow_implicit_invocation: true

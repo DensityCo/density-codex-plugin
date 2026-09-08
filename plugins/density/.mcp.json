@@ -1,11 +1,12 @@
 {
   "mcpServers": {
     "density": {
-      "command": "node",
-      "args": [
-        "./mcp-server/server.mjs"
-      ],
-      "cwd": "."
+      "type": "http",
+      "url": "https://mcp.density.io",
+      "oauth_resource": "https://mcp.density.io",
+      "scopes": [
+        "density:query"
+      ]
     }
   }
 }

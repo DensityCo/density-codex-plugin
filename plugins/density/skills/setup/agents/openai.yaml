@@ -1,6 +1,6 @@
 interface:
   display_name: "Setup"
-  short_description: "Set up and sync local Density data."
-  default_prompt: "Use $setup to check Density readiness and prepare local Parquet data."
+  short_description: "Connect Density and verify hosted data access."
+  default_prompt: "Use $setup to verify my Density connection, sign-in, and hosted dataset access."
 policy:
   allow_implicit_invocation: false
