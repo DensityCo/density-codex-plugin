@@ -5,7 +5,7 @@ description: Help users connect the Density plugin, sign in, and diagnose hosted
 
 # Density Setup
 
-The Density plugin connects to `https://mcp.density.io` through Streamable HTTP and OAuth.
+The Density plugin connects to `https://mcp.density.io/` through Streamable HTTP and OAuth.
 The hosted server runs tools against the user's authorized data.
 The user does not need a local CLI, terminal commands, or local datasets.
 

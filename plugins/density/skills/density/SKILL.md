@@ -5,7 +5,7 @@ description: Answer historical workplace questions with the hosted Density MCP, 
 
 # Density
 
-Use the authenticated Density MCP at `https://mcp.density.io`.
+Use the authenticated Density MCP at `https://mcp.density.io/`.
 The server supplies authorized data and runs the queries.
 Users do not need a local CLI, local datasets, or manual synchronization.
 
