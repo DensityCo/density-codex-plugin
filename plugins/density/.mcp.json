@@ -2,7 +2,7 @@
   "mcpServers": {
     "density": {
       "type": "http",
-      "url": "https://mcp.density.io/",
+      "url": "https://mcp.density.io/mcp",
       "oauth_resource": "https://mcp.density.io/",
       "scopes": [
         "density:query"
