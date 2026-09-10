@@ -31,13 +31,26 @@ Prefer a stable space ID as the entity column. Resolve external IDs through expl
 If the query already returns the required evidence, reuse its `evidenceId`.
 Never insert external values into SQL to manufacture a combined query result.
 
-Declare the Density time, value, optional entity, and optional interval-end aliases exactly as returned.
-Declare each measurement as `instant`, `interval_mean`, `interval_total`, `cumulative`, or `plan`.
-Declare `percentageBasis` when the values represent percentages. Do not infer the basis from their magnitude.
-Provide an IANA timezone and preserve timezone-qualified instants, including repeated daylight-saving hours.
+Choose `mode: time_series` for observations with times or intervals.
+For time-series mode, omit top-level `window`. Preserve exact bounds in Density evidence and interval rows.
+Declare the exact returned time, value, optional entity, and optional interval-end aliases.
+Use `instant`, `interval_mean`, `interval_total`, `cumulative`, or `plan` for those observations.
+Use `plan` only for supplied dated assumptions, never Density history.
+Only `interval_mean` and `interval_total` accept ends; both require an end for every row.
+For plans, omit row ends. Align dated plan values with `companionAggregation: last` at matching bin boundaries.
+Empty plan bins remain missing. Do not assume that a value fills later bins.
 
-Omit `alignment` when the observations already share exact time points or intervals.
-Otherwise, declare the interval and aggregation for each source.
+For one aggregate per entity without an observation time, use `mode: window_summary` and `kind: window_summary`.
+Declare `valueField`, `windowStartField`, and `windowEndField` from the returned evidence.
+Set top-level `window.start` and `window.end` to that same full evidence window.
+The window end is exclusive. Do not invent a peak timestamp or reuse a boundary as an observation time.
+Declare `entityField` for stable IDs and `entityLabelField` for their readable names when present.
+Declare `percentageBasis` when the values represent percentages. Do not infer the basis from their magnitude.
+Provide an IANA timezone. For time-series observations, preserve timezone-qualified instants, including repeated daylight-saving hours.
+
+Window summaries do not accept `alignment` or `analysis`.
+For time-series observations with matching time points or intervals, omit `alignment`.
+For other time-series observations, declare the interval and aggregation for each source.
 Use duration-weighted means for interval averages and sums only for compatible interval totals.
 Do not sum room CO2 concentrations, split unknown totals, or count overlapping booking intervals twice.
 Prepare disjoint booked-time intervals before comparing bookings with room use.
@@ -46,13 +59,17 @@ Do not aggregate unrelated rooms into a single room-level correlation.
 ## Compare measurements
 
 Supply `companion.source`, `companion.metric`, and `companion.rows`.
-Each row contains `time`, `value`, and optional `end`, `entity`, and observation `state`.
-Map external entities to identifiers in the authorized Density evidence.
+Time-series rows contain `time`, `value`, and optional `end`, `entity`, and observation `state`.
+Window-summary rows contain `value` and optional `entity` and `state`, without observation times.
+For a hypothetical window summary, declare `companion.classification: hypothetical`. Do not use classification for time-series input.
+If either source declares entities, supply explicit `mapping` entries for every companion entity.
+Identical IDs still need identity mappings. `chart.entities` selects displayed entities; it does not replace mapping.
+Scenarios do not accept mapping.
 The tool never changes the original evidence or saves a reusable companion dataset.
 
-Include `analysis.correlation` for descriptive Pearson correlation.
+For time-series comparisons, include `analysis.correlation` for descriptive Pearson correlation.
 Declare a lag only when the question or source method specifies it.
-Include `analysis.threshold` for a supplied high or low threshold.
+For time-series comparisons, include `analysis.threshold` for a supplied high or low threshold.
 For room CO2, report paired counts and missing coverage with the association.
 An association does not establish that occupancy caused the measured CO2 change.
 The result retains per-entity associations for a complete table or ranking.
