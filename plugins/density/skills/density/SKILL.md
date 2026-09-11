@@ -44,15 +44,32 @@ Do not inspect the global tool inventory or list resources before a normal histo
 Do not reread a successful schema response for the same question.
 Use only its exact customer-scoped tables and fields. Do not bypass authorization or supply local paths.
 If existing evidence answers a follow-up, reuse it without schema discovery or another query.
-Run a new query only when the required meaning or evidence changes.
+Run a new query only when the required meaning or evidence changes, including a missing field needed for one bounded chart repair.
 This rule does not permit schema reuse across new historical questions.
+
+## Prepare historical data
+
+For requested preparation, use `prepare_dataset` with the selected organization, exact window, and requested interval.
+The tool accepts any historical duration. Internal chunks do not limit the requested window.
+Use timestamps with explicit timezones. The start is inclusive; the end is exclusive.
+Align both boundaries to the requested interval in UTC. Clarify conflicting boundaries instead of changing them.
+If the window or interval is missing, ask one focused question.
+While the status is `preparing`, repeat the same arguments to continue from saved progress.
+If another preparation is `busy`, report the saved progress and avoid rapid retries.
+If the status is `completed`, another generation is active. Do not claim that current queries use the completed preparation.
+Keep preparation progress separate from measured coverage. Missing source observations are not zero use.
+The previous active dataset remains available until the requested preparation finishes.
+Do not shorten the window, change the interval, download data locally, or request server credentials.
 
 ## Query evidence
 
 `analysis` declares interpretation; it does not validate SQL intent. Include it when it adds useful context.
 Use `analysis.window` or `chart.window` only for explicit calendar dates in `YYYY-MM-DD` format.
+Both dates are inclusive local calendar dates. Never copy an exclusive SQL cutoff into the visible end date.
 For timestamp windows, omit these date fields. Preserve exact timestamp boundaries in SQL and return boundary aliases.
 For relative periods, return the actual window boundaries as evidence aliases.
+For grouped history, return constant SQL DATE aliases `coverage_start_local_date` and `coverage_end_local_date` from measured local dates.
+Keep partial months explicit. Month labels alone do not establish the first or last covered day.
 Do not run a planning query when one answer query can resolve the question.
 Use read-only SELECT statements. Never use writes, PRAGMA, COPY, ATTACH, raw tables, internal tables, files, or external URLs.
 
@@ -60,6 +77,7 @@ Unless the user specifies another window, use complete local calendar days endin
 Convert each building's local boundaries to UTC and filter `bucket_start` before aggregation. Do not use fixed UTC offsets.
 Use `local_date`, `weekday`, and `hour` only after that filter.
 Use `building_id`, `floor_id`, and `space_function` directly when they resolve the population.
+For names, capacity, or planning status, use the authorized metadata table without metric joins unless the question requires measurements.
 
 Preserve 15-minute resolution when every compared population uses it.
 For mixed resolutions, normalize to one row per space and local hour.
@@ -78,8 +96,17 @@ The model assigns exact returned aliases to evidence roles. The renderer owns la
 Read `references/slide-orchestration.md` only when column roles need clarification.
 Set `chart.scopeLabel` to the requested building, floor, or space. For percentage bars, set `chart.display.scaleMax` to 100.
 Declare population counts only through constant aliases present in every row.
-For a weekday-hour heatmap, use weekday as `entity`, local hour as `time`, and percentage as `measure`.
+For a weekday-hour heatmap, use weekday as `entity`, local hour as `time`, and the requested number or percentage as `measure`.
 Do not use `series` for this single heatmap.
+Preserve people units when the user asks for occupancy. Do not require capacity or change the metric to obtain a heatmap.
+Prefer weekday names. For numeric weekdays, declare the column's `weekdayConvention` from the SQL expression.
+For intraday lines, declare the time column's `timeKind` and `intervalMinutes`.
+Use `local_datetime` for serialized local clock values and `instant` for UTC or offset timestamps.
+Use instants across daylight-saving transitions. Preserve repeated hours and missing intervals.
+Use `date` for daily or monthly calendar labels.
+For histograms, return distinct bin-label, low-boundary, high-boundary, and count aliases.
+Use contiguous half-open bins, such as 0–5 and 5–10. Keep the original numeric values for bin assignment.
+Keep `coverageNote` concise and visible. State partial periods and missing intervals without query mechanics.
 
 A bar chart displays at most 20 rows. Keep the complete ranking in SQL evidence.
 Disclose the displayed and total counts. If rows remain, state how many and offer the remaining chart.
@@ -92,9 +119,14 @@ For a clear request outside the Brief grammar, automatically use the nearest tru
 If units, populations, periods, timezones, denominators, or aggregations cannot share one faithful chart, render separate charts.
 Label each chart with the evidence it shows. Do not imply that related context answers a different question.
 If no truthful chart exists, state the evidence limit.
-If the renderer rejects the chosen declaration, preserve usable evidence and state the representation limit.
+If a rejection identifies a correctable declaration error, make one bounded repair and retry the same body once.
+Reuse the evidence when it contains every required field.
+If a required bin label or boundary is absent, run one corrective SELECT before that retry.
+Keep the same authorized scope, window, population, metric, denominator, aggregation, timezone, and source resolution.
+Do not ask the user to resolve renderer fields or authorize this routine repair.
+Never requery to change labels, colors, precision, or other display formatting.
+If the repair fails or changes meaning, preserve usable evidence and state the representation limit.
 Do not retry another body, use the previous renderer, or rebuild an artifact.
-Reformatting existing evidence does not require another query.
 
 ## Data and access boundaries
 
@@ -106,6 +138,6 @@ Hosted comparison processing is temporary. Returned charts and exports can remai
 
 This server does not provide live availability, floorplans, sensor health, or benchmark lookup.
 Do not substitute historical occupancy for current availability or sensor status.
-If the server returns `dataset_pending`, report that preparation is incomplete. Do not start a local download.
+If the server returns `dataset_pending`, use the preparation workflow when the requested window and interval are known.
 For an authentication failure, ask the user to reconnect and sign in before retrying.
 Use the `setup` skill for connection problems. Never request tokens or server credentials.

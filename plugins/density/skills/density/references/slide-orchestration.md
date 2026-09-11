@@ -14,13 +14,21 @@ The declaration may include a preferred body from the expanded chart vocabulary.
 Use an optional `time` field, an optional `entity` field for time series, at most one `series` field only with `time`, and one or more numeric `measure` fields.
 Use `bin`, `low`, and `high` together for a histogram.
 An `entity` field is required for entity charts and heatmaps, but not scalar tiles.
-For a weekday-hour heatmap, declare weekday as `entity`, local hour as `time`, and the percentage as `measure`. Do not use `series` for this single heatmap.
+For a weekday-hour heatmap, declare weekday as `entity`, local hour as `time`, and the requested number or percentage as `measure`.
+Do not use `series` for this single heatmap.
+Keep the requested units. A people heatmap does not require a capacity denominator.
 
 The direct-query renderer has verified projections for bars, line, heatmap,
 histogram, tiles, table, stacked bars, scatter, slope, range, area, pie, and
 donut results.
 Choose the nearest truthful supported chart for a clear request.
-If the renderer rejects that declaration, preserve the evidence and explain the representation limit.
+If a rejection identifies a correctable declaration error, repair it and retry the same body once.
+Reuse the existing evidence when all required fields are present.
+If a required bin label or boundary is absent, run one corrective SELECT before that retry.
+Preserve authorization, scope, window, population, metric, denominator, aggregation, timezone, and source resolution.
+Never requery to change display formatting.
+Do not ask the user to resolve renderer internals.
+If that repair fails or changes meaning, preserve the evidence and explain the representation limit.
 Do not retry other chart bodies.
 
 Chart requests use the governed fixed slide renderer and preserve the same 1920×1080 artifact in the inline preview and downloaded output.

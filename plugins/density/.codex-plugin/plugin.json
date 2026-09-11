@@ -1,6 +1,6 @@
 {
   "name": "density",
-  "version": "0.2.62",
+  "version": "0.2.63",
   "description": "Density workplace analytics through the hosted MCP. Sign in to query authorized data and create evidence-backed charts.",
   "author": {
     "name": "Density"
