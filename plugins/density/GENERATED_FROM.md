@@ -1,5 +1,5 @@
 # Generated Density plugin source
 
-This tree is generated from DensityCo/density-mcp `plugins/density` at commit `491c34864c9210d9d3deb517012d38f45622f048`.
+This tree is generated from DensityCo/density-mcp `plugins/density` at commit `192beb84bdbcab60c7d75bfeac7f30b4bb99e7e0`.
 
 It must not be edited in DensityCo/density-codex-plugin.

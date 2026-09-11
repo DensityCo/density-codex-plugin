@@ -25,18 +25,20 @@ State the proposed working-hours schedule. Preserve an explicit metric and sched
 
 ## Organization and workflow
 
-1. For an organization switch, call `select_organization` with its trusted `organizationId`.
-2. Read the returned `schemaUri`. Otherwise, read `density://schema` directly once for each new historical question.
-3. Use `query_db` for one sufficient SELECT with the result and supporting evidence.
-4. For a requested chart, use `render_chart` with the returned evidence ID and a deliberate chart declaration.
-5. For supplied comparisons or scenarios, read `references/companion-datasets.md`, then use `compare_dataset` with that evidence ID.
+1. If a company name needs resolution, call `search_organizations`.
+   The tool returns up to ten matches by default. Increase `limit` only when the user needs more matches.
+2. If several organizations match, ask the user to choose one. Search does not authorize access.
+3. For an organization switch, call `select_organization` with the trusted or chosen `organizationId`.
+4. Read the returned `schemaUri`. Otherwise, read `density://schema` directly once for each new historical question.
+5. Use `query_db` for one sufficient SELECT with the result and supporting evidence.
+6. For a requested chart, use `render_chart` with the returned evidence ID and a deliberate chart declaration.
+7. For supplied comparisons or scenarios, read `references/companion-datasets.md`, then use `compare_dataset` with that evidence ID.
 
 An initial question can use the authorized default organization without selection.
 Keep the saved organization for follow-ups. Omit organization IDs unless the tool requires an explicit binding.
 If an ID is supplied, it must match the saved organization.
 If selection expires or is missing, restore the last requested organization. Never silently return to the default.
 If a switch is denied, preserve the previous choice. Do not guess organization IDs from company names.
-If no trusted ID is available, ask for it.
 Use `get_access_context` for requested access inspection or recovery, not as a routine query preflight.
 Access does not establish dataset readiness. Saved selection and schema knowledge do not authorize a request.
 
