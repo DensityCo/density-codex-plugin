@@ -44,6 +44,7 @@ Access does not establish dataset readiness. Saved selection and schema knowledg
 
 Do not inspect the global tool inventory or list resources before a normal historical query.
 Do not reread a successful schema response for the same question.
+The returned organization-specific schema URI satisfies this read. Do not also read the default schema URI.
 Use only its exact customer-scoped tables and fields. Do not bypass authorization or supply local paths.
 If existing evidence answers a follow-up, reuse it without schema discovery or another query.
 Run a new query only when the required meaning or evidence changes, including a missing field needed for one bounded chart repair.
@@ -90,6 +91,8 @@ Return unrounded numeric values for comparisons, thresholds, bins, and ordering.
 Convert fractional percentages to 0–100 values without rounding. The renderer applies display precision.
 Use one decimal for average occupancy and average time-used labels. Show whole discrete people and whole hours.
 Keep absent rows, null observations, and recorded zero distinct.
+When returned activation evidence excludes requested intervals, report those exclusions separately from eligible missing observations.
+Do not infer an activation timestamp from the first returned observation.
 An error or timeout is not zero occupancy. An aggregate with no matching observations is not evidence of zero use.
 
 ## Chart declaration
@@ -107,6 +110,7 @@ Use `local_datetime` for serialized local clock values and `instant` for UTC or 
 Use instants across daylight-saving transitions. Preserve repeated hours and missing intervals.
 Use `date` for daily or monthly calendar labels.
 For histograms, return distinct bin-label, low-boundary, high-boundary, and count aliases.
+Label the bin column with the measured quantity, such as peak occupancy. Omit decimals for histogram counts.
 Use contiguous half-open bins, such as 0–5 and 5–10. Keep the original numeric values for bin assignment.
 Keep `coverageNote` concise and visible. State partial periods and missing intervals without query mechanics.
 
@@ -127,6 +131,9 @@ If a required bin label or boundary is absent, run one corrective SELECT before 
 Keep the same authorized scope, window, population, metric, denominator, aggregation, timezone, and source resolution.
 Do not ask the user to resolve renderer fields or authorize this routine repair.
 Never requery to change labels, colors, precision, or other display formatting.
+For a formatting follow-up, reuse the evidence and render once with the requested changes.
+After a successful render, do not repeat it to probe cosmetic alternatives. Report any remaining display limit.
+Keep measure units declared even when the subtitle also names them.
 If the repair fails or changes meaning, preserve usable evidence and state the representation limit.
 Do not retry another body, use the previous renderer, or rebuild an artifact.
 
