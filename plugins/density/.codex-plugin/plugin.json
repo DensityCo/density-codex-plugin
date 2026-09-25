@@ -1,6 +1,6 @@
 {
   "name": "density",
-  "version": "0.2.71",
+  "version": "0.2.72",
   "description": "Density workplace analytics through the hosted MCP. Sign in to query authorized data and create evidence-backed charts.",
   "author": {
     "name": "Density"
@@ -26,9 +26,7 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Connect Density and check which data I can access. Then prepare the last 90 complete UTC days of historical data at 15-minute intervals.",
-      "Analyze occupancy for my building",
-      "Create a chart from my Density query"
+      "Connect Density and check which data I can access. Then prepare the last 90 complete UTC days of historical data at 15-minute intervals."
     ],
     "brandColor": "#8C2F1D",
     "composerIcon": "./assets/density-icon.png",
